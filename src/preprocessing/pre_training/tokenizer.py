@@ -11,11 +11,34 @@ from typing import Dict, Tuple, List
 # internal imports
 from ...utils.logger import get_logger
 
+# globals
+VOCAB_SIZE = 12257 # GPT-2 vocab size for 10B tokens of trainig was 50000
+NUM_MERGES = VOCAB_SIZE - 256
+SPECIAL_TOKENS = {
+    12256: "<|EOF|>" # End Of File
+}
+
 # set up logging
 _logger = get_logger(__name__, level="DEBUG")
 class Tokenizer:
     def __init__(self, ):
         pass
+
+    def train(self):
+        """Train the tokenizer on the list of tokens"""
+        vocab_size = 276 # up to us to decide, hyperparameter
+        num_merges = vocab_size - 256
+        ids = tokens.copy() # so we don't destroy the original list
+
+        merges = {} # have the mapping (int, int) -> int of the pair to the new token
+        for n in range(num_merges):
+            idx = 256 + n # n starts at 0
+            stats = get_stats(ids)
+            top_pair = max(stats, key=stats.get)
+            print(f"Merging {top_pair} -> {idx}")
+            ids = merge(ids, top_pair, idx)
+            merges[top_pair] = idx   
+    
 
     def _merge(self, ids: List, bigram: Tuple, idx: int) -> List[int]:
         """Helper function to substitute pairs

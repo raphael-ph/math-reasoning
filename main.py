@@ -1,4 +1,4 @@
-from preprocessing.pre_training.loader import RepoLoader
+from src.preprocessing.pre_training.loader import RepoLoader
 
 def main():
     # --- Example Usage ---
@@ -16,4 +16,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # main()
+    path = "data/mathlib_corpus.txt"
+    with open(path, "r") as f:
+        file = f.read()
+    print(len(file))
