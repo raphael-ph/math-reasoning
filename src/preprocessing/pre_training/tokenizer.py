@@ -6,8 +6,11 @@
 # 2. This blog: https://sebastianraschka.com/blog/2025/bpe-from-scratch.html
 # 3. GPT-2 paper: https://cdn.openai.com/better-language-models/language_models_are_unsupervised_multitask_learners.pdf
 
-# A more advanced, feature-rich alternative for complex and performance-critical regular expression operations
-import regex as re
+import os
+import json
+import regex as re # A more advanced, feature-rich alternative for complex and performance-critical regular expression operations
+from pathlib import Path
+from datetime import datetime
 from typing import Dict, Tuple, List, Optional
 
 # internal imports
@@ -18,38 +21,115 @@ VOCAB_SIZE = 12257 # GPT-2 vocab size for 10B tokens of trainig was 50000
 NUM_MERGES = VOCAB_SIZE - 256
 GPT4_SPLIT_PAT = r"""'(?i:[sdmt]|ll|ve|re)|[^\r\n\p{L}\p{N}]?+\p{L}+|\p{N}{1,3}| ?[^\s\p{L}\p{N}]++[\r\n]*|\s*[\r\n]|\s+(?!\S)|\s+"""
 SPECIAL_TOKENS = {
-    "<|endoftext|>": 12256 # similar to OpenAI 
+    "<|endoftext|>": 12256, # token marking the End of a File (similar to OpenAI)
 }
 # set up logging
 _logger = get_logger(__name__, level="DEBUG")
 class Tokenizer:
     def __init__(self, 
                  special_tokens: Dict[str, int], 
-                 pattern: Optional[str], 
-                 vocab_size: Optional[int], 
-                 num_merges: Optional[int]):
-        self.special_tokens = self._invert_special_tokens(special_tokens)
+                 pattern: Optional[str] = None, 
+                 vocab_size: Optional[int] = None, 
+                 num_merges: Optional[int] = None,
+                 vocab_output_path: Optional[str] = None):
+        self.special_tokens = special_tokens
+        self.inv_special_tokens = self._invert_special_tokens(special_tokens)
         # split pattern
         pattern = GPT4_SPLIT_PAT if pattern is None else pattern
         self.pattern = re.compile(pattern)
         self.vocab_size = VOCAB_SIZE if vocab_size is None else vocab_size
         self.num_merges = NUM_MERGES if num_merges is None else num_merges
 
+        # defining the output vocab path
+        if not vocab_output_path:
+            vocab_path = "data/vocab"
+            _logger.info(f"No output path provided. Fallback vocab to default path: {vocab_path}")
+            self.vocab_output_path = Path(vocab_path)
+        else:
+            vocab_path = Path(vocab_output_path)
+            if os.path.isdir(vocab_path):
+                self.vocab_output_path = vocab_path
+            elif os.path.exists(vocab_path):
+                print(f"'{vocab_path}' exists but is not a directory.")
+                raise Exception(f"'{vocab_path}' exists but is not a directory.")
+            else:
+                _logger.info(f"'{vocab_path}' does not exist. Creating...")
+                os.mkdir(vocab_path)
+                self.vocab_output_path = vocab_path
+    
     # --- MAIN FUNCTIONS ---
-    def train(self):
+    def train(self, text, verbose: bool=False):
         """Train the tokenizer on the list of tokens"""
         merges = {} # have the mapping (int, int) -> int of the pair to the new token
-        for n in range(self.num_merges):
-            idx = 256 + n # n starts at 0
-            stats = self._get_stats(ids)
+
+        # break the chunks
+        text_chunks = re.findall(self.pattern, text)
+
+        if verbose: 
+            _logger.info(f"Text chunks: {text_chunks[:10]}")
+            _logger.info(f"Converting input text to utf-8 ids...")
+            _logger.info(f"--- Example of convertion: ---")
+            for ch in text_chunks[:10]:
+                _logger.info(f"{ch} -> {list(ch.encode("utf-8"))}")
+        
+        # input for text processing        
+        ids = [list(ch.encode("utf-8")) for ch in text_chunks]
+        merges = {}
+        vocab = {idx: bytes([idx]) for idx in range(256)} # initialize the vocab
+        for i in range(self.num_merges):
+            stats = {}
+            for chunk_ids in ids:
+                self._get_stats(chunk_ids, stats)
+            if not stats:
+                break
             top_pair = max(stats, key=stats.get)
+            idx = 256 + i
+            ids = [self._merge(chunk_ids, top_pair, idx) for chunk_ids in ids]
+            merges[top_pair] = idx
+            vocab[idx] = vocab[top_pair[0]] + vocab[top_pair[1]]
+            if verbose:
+                _logger.info(f"merge {i+1}/{self.num_merges}: {top_pair} -> {idx} ({vocab[idx]}) had {stats[top_pair]} occurrences")
+        
+        # Tokenization completion
+        _logger.info(f"Tokenization completed!")
+        _logger.info(f"Vocab size : {len(vocab)}")
+        _logger.info(f"New tokens: {len(vocab) - 256}")
+        
+        # Saving in memory
+        self.merges = merges # used at encode()
+        self.vocab = vocab   # used at decode()
 
-            _logger.debug(f"Merging {top_pair} -> {idx}")
+        # Formatting the tokenization config file
+        serializable_merges = {
+            f"{pair[0]}, {pair[1]}": idx
+            for pair, idx in self.merges.items()
+        }
 
-            ids = self._merge(ids, top_pair, idx)
-            merges[top_pair] = idx   
-    
+        tokenizer_config = {
+            "name": "Custom_BPE_Tokenizer",
+            "vocab_size": len(self.vocab),
+            "pattern": self.pattern.pattern, # Save the regex pattern string
+            "special_tokens": self.special_tokens,
+            "merges": serializable_merges
+        }
+        
+        # saving vocab
+        _logger.info(f"Saving vocab to {self.vocab_output_path}")
+        config_file_name = f"tokenizer_config_{datetime.now().strftime("%Y%m%d%H%M%S")}.txt"
+        full_path = self.vocab_output_path / config_file_name
 
+        _logger.info(f"Saving tokenizer configuration to {full_path}")
+
+        try:
+            with open(full_path, "w", encoding="utf-8") as f:
+                # json.dump serializes the dictionary to the file, using indent for readability
+                json.dump(tokenizer_config, f, indent=4)
+            
+            _logger.info(f"Configuration saved successfully.")
+            
+        except Exception as e:
+            _logger.error(f"Failed to save tokenizer configuration to {full_path}: {e}")
+        
     # --- HELPER FUNCTIONS ---
     def _merge(self, ids: List, bigram: Tuple, idx: int) -> List[int]:
         """Helper function to substitute pairs
@@ -76,7 +156,7 @@ class Tokenizer:
                 i += 1
         return bpe
 
-    def _get_stats(self, ids: List) -> Dict[Tuple, int]:
+    def _get_stats(self, ids: List, counts: Dict[Tuple, int]) -> Dict[Tuple, int]:
         """Helper function to get information of bigrams:
         
         Args:
@@ -86,7 +166,7 @@ class Tokenizer:
             Dict[Tuple, int]: dictionary conatining the bigram and it's frequency
             of appearance on the corpus
         """
-        counts = {} # dict to handle the counting of pairs
+        counts = {} if counts is None else counts
         for bigram in zip(ids, ids[1:]):  # getting together n and n+1 bytes
             # Get value if key does not exist, with a specified default value
             counts[bigram] = counts.get(bigram, 0) + 1
@@ -104,3 +184,8 @@ class Tokenizer:
         Returns: Dict[int, str]: inverted dict
         """
         return {v : k for k, v in special_tokens_dict.items()}
+    
+if __name__ == "__main__":
+    text = "The bigger they are, the harder they fall."
+    tok = Tokenizer(special_tokens=SPECIAL_TOKENS)
+    tok.train(text, verbose=False)
