@@ -129,12 +129,57 @@ class Tokenizer:
             
         except Exception as e:
             _logger.error(f"Failed to save tokenizer configuration to {full_path}: {e}")
-    
-    def encode_no_special(self, text):
-        """"""
 
     def decode(self):
         pass
+
+    def encode(self, text: str) -> List:
+        """Encodes text to tokens w.r.t spedial tokens
+        
+        Args:
+            text (str): Text to encode
+        
+        Returns:
+            List of encoded ids
+        """
+        # we handle special tokens by splitting the text whenever we find the 
+        # exact occurence of any of the special tokens. We use re.split()
+        # to extract every occurence of special tokens and change it for the corresponding token
+        # mapped on the self.pattern dict.
+        # Reference for the special_pattern: https://github.com/karpathy/minbpe/blob/master/minbpe/regex.py
+        # This works because special characters are defined like OAI's, e.g.: <|specialcharacter|>
+        special_pattern = "(" + "|".join(re.escape(k) for k in self.special_tokens) + ")"
+        special_chunks = re.split(special_pattern, text)
+        ids = []
+        for part in special_chunks:
+            if part in self.special_tokens:
+                _logger.debug(f"Special token detected at part: {part}")
+                ids.append(self.special_tokens[part]) # handle special tokens
+            else:
+                _logger.debug(f"Non special token at part: {part}")
+                ids.extend(self.encode_no_special(part)) # simply encode the no-special part
+        return ids
+
+    def encode_no_special(self, text: str) -> List:
+        """Encodes text ignoring the special tokens completely.
+        
+        In this case, special token s will be trated and encoded like
+        any other regular token. This follows the tiktoken implementation.
+
+        Args:
+            text (str): Text to encode
+        
+        Returns:
+            List of encoded ids
+        """
+        text_chunks = re.findall(self.pattern, text)
+        ids = []
+        for chunk in text_chunks:
+            chunk_bytes = chunk.encode("utf-8")
+            chunk_ids = self._encode_chunk(chunk_bytes)
+            ids.extend(chunk_ids)
+        
+        return ids
 
     # --- HELPER FUNCTIONS ---
     def _merge(self, ids: List, bigram: Tuple, idx: int) -> List[int]:
@@ -162,7 +207,7 @@ class Tokenizer:
                 i += 1
         return bpe
 
-    def _get_stats(self, ids: List, counts: Dict[Tuple, int]) -> Dict[Tuple, int]:
+    def _get_stats(self, ids: List, counts: Dict[Tuple, int] = None) -> Dict[Tuple, int]:
         """Helper function to get information of bigrams:
         
         Args:
@@ -205,6 +250,10 @@ class Tokenizer:
             List of ids
         """
         ids = list(text_bytes)
+        # assert merges exist, which means the tokenizer is trained
+        if self.merges is None:
+            _logger.error(f"Tokenizer is not trained. Train the tokenizer before encoding")
+            raise ValueError(f"Tokenizer is not trained. Train the tokenizer before encoding")
         while len(ids) >= 2: # at least two tokens, else return the simple tokenization
             # we need to start substituting the pairs with the first index first
             stats = self._get_stats(ids)
@@ -212,10 +261,13 @@ class Tokenizer:
             if pair not in self.merges:
                 break # no more pairs
             idx = self.merges[pair]
-            ids = self.merge(ids, pair, idx)
+            ids = self._merge(ids, pair, idx)
         return ids
     
 if __name__ == "__main__":
     text = "The bigger they are, the harder they fall."
     tok = Tokenizer(special_tokens=SPECIAL_TOKENS)
-    tok.train(text, verbose=False)
+    tok.train(text)
+    ids = tok.encode("The bigger they are the harder the fall <|endoftext|>")
+
+    print(ids)
