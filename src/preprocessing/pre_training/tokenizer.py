@@ -129,7 +129,13 @@ class Tokenizer:
             
         except Exception as e:
             _logger.error(f"Failed to save tokenizer configuration to {full_path}: {e}")
-        
+    
+    def encode_no_special(self, text):
+        """"""
+
+    def decode(self):
+        pass
+
     # --- HELPER FUNCTIONS ---
     def _merge(self, ids: List, bigram: Tuple, idx: int) -> List[int]:
         """Helper function to substitute pairs
@@ -184,6 +190,30 @@ class Tokenizer:
         Returns: Dict[int, str]: inverted dict
         """
         return {v : k for k, v in special_tokens_dict.items()}
+    
+    def _encode_chunk(self, text_bytes: bytes) -> List:
+        """Encodes chunks into tokens
+        
+        This function is a direct reference to Karpathy's implementation. It
+        is designed as a helper function that will encode chunks exclusively. Only change
+        is that it reeceives the byte text.
+
+        Args:
+            text_bytes (bytes): Byte text representation
+
+        Returns:
+            List of ids
+        """
+        ids = list(text_bytes)
+        while len(ids) >= 2: # at least two tokens, else return the simple tokenization
+            # we need to start substituting the pairs with the first index first
+            stats = self._get_stats(ids)
+            pair = min(stats, key=lambda p: self.merges.get(p, float("inf")))
+            if pair not in self.merges:
+                break # no more pairs
+            idx = self.merges[pair]
+            ids = self.merge(ids, pair, idx)
+        return ids
     
 if __name__ == "__main__":
     text = "The bigger they are, the harder they fall."
