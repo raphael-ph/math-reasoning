@@ -292,4 +292,3 @@ if __name__ == "__main__":
     tok.train(text)
     t = tok.decode(tok.encode("The bigger they are the harder the fall.<|endoftext|>"))
     print(t)
-    
