@@ -40,9 +40,15 @@ class MLP(nn.Module):
 
         if dropout:
             layers.append(nn.Dropout(dropout))
-
+        
         self.model = nn.Sequential(*layers)
+        total_params = sum(param.numel() for param in self.model.parameters())
+        _logger.debug(f"Total MLP size: {total_params}")
     
     def forward(self, x):
         y = self.model(x)
         return y
+    
+if __name__ == "__main__":
+    net = MLP(5, 1, 20, 4, 0.2)
+    print(net)
