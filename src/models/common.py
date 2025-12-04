@@ -1,0 +1,48 @@
+# This is a script to hold any commom Modules and structures that can
+# be shared around multiple implementations.
+
+from typing import Optional
+
+import torch
+import torch.nn as nn
+
+# internal modules
+from ..utils.logger import get_logger
+
+_logger = get_logger(__name__, level="DEBUG")
+
+# --- MLP ---
+# A Simple Implementation of a Multi Layer Perceptron
+class MLP(nn.Module):
+    """Implementation of a generic multilayer perceptron"""
+    def __init__(self, 
+                 in_dim: int,
+                 out_dim: int,
+                 hidden_dim: int,
+                 hidden_layers: int,
+                 dropout: Optional[float] = None,):
+        super().__init__()
+        self.out_dim = out_dim
+        self.dropout = dropout
+        dim = in_dim
+
+        # creating the MLP
+        layers = []
+        for i in range(hidden_layers):
+            layers += [
+                nn.Linear(dim, hidden_dim),
+                nn.ReLU() # dreamer implementation
+            ]
+            dim = hidden_dim
+        
+        # adding the output layer
+        layers.append(nn.Linear(dim, out_dim))
+
+        if dropout:
+            layers.append(nn.Dropout(dropout))
+
+        self.model = nn.Sequential(*layers)
+    
+    def forward(self, x):
+        y = self.model(x)
+        return y
