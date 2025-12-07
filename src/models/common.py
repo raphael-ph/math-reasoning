@@ -20,7 +20,9 @@ class MLP(nn.Module):
                  out_dim: int,
                  hidden_dim: int,
                  hidden_layers: int,
-                 dropout: Optional[float] = None,):
+                 activation: nn.Module = nn.ReLU(),
+                 dropout: Optional[float] = None,
+                 ):
         super().__init__()
         self.out_dim = out_dim
         self.dropout = dropout
@@ -31,7 +33,7 @@ class MLP(nn.Module):
         for i in range(hidden_layers):
             layers += [
                 nn.Linear(dim, hidden_dim),
-                nn.ReLU() # dreamer implementation
+                activation
             ]
             dim = hidden_dim
         
