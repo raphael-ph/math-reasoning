@@ -146,3 +146,7 @@ class Transformer(nn.Module):
         # TO DO: implement Sine PE
         positional_encoding = self.pos_encoding(torch.arange(T, device=DEVICE)) # (B, T) -> (B, T, C) adds embeddings for the position
         x = token_embeddings + positional_encoding
+        x = self.blocks(x)
+        x = self.layer_norm(x)
+        logits = self.linear(x) # (B, T, C) -> (B, T, vocab_size)
+
