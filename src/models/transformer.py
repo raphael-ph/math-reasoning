@@ -92,6 +92,11 @@ class MultiHeadAttention(nn.Module):
 # --- Transformer Block ---
 class Block(nn.Module):
     def __init__(self, n_heads: int, emb_dim: int):
+        """Implementation of the Transformer block. 
+        
+        Inspired by Karpathy, this implementation does not have the "second" multi-head attention
+        presented in the original architecture. This only implements the Masked Attention.
+        """
         super().__init__()
         head_size = emb_dim//n_heads
 
