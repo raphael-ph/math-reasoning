@@ -20,7 +20,7 @@ class MLP(nn.Module):
                  out_dim: int,
                  hidden_dim: int,
                  hidden_layers: int,
-                 activation: nn.Module = nn.ReLU(),
+                 activation: nn.Module = nn.ReLU(), # defaults to ReLU
                  dropout: Optional[float] = None,
                  ):
         super().__init__()
