@@ -15,7 +15,7 @@ from .common import MLP
 # --- Attention Head ---
 class AttentionHead(nn.Module):
     """Single head of Attention"""
-    def __init__(self, emb_dim: int, head_size: int):
+    def __init__(self, emb_dim: int, head_size: int, dropout: float = 0.2):
         super().__init__()
         # The authors use a fixed d_model = 512. That is our "head_size"
         # This is a fixed dim throughout the whole attention module. As per the paper:
@@ -24,13 +24,14 @@ class AttentionHead(nn.Module):
         self.k = nn.Linear(emb_dim, head_size, bias=False)
         self.q = nn.Linear(emb_dim, head_size, bias=False)
         self.v = nn.Linear(emb_dim, head_size, bias=False)
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
         """Implementation of the forward pass of the Attention Head
         
         This implementation is true to the 'Attention is all you need' paper, following
         the same steps:
-        >>> Matmul(Q, K) = weights -> Scale(weights) -> Mask(weights) -> Softmax(weights) = out -> Matmul(out, V)
+        >>> Matmul(Q, K) = weights -> Scale(weights) -> Mask(weights) -> Softmax(weights) -> Matmul(wei, V)
         """
         B, T, C = x.shape
         # Key, Query first go through a Linear transformation. 
@@ -51,11 +52,16 @@ class AttentionHead(nn.Module):
         wei = wei.masked_fill(tril == 0, float("-inf"))
 
         # Softmax(weights)
-        out = F.softmax(wei, -1) # apply softmax to the Channel dim, so we get the probs for the embeddings
+        wei = F.softmax(wei, -1) # apply softmax to the Channel dim, so we get the probs for the embeddings
+
+        # Adding a dropout after computing the Softmax;
+        # This simulates that we destroy some tracks of communication, forcing the network to learn
+        # more robust representations.
+        wei = self.dropout(wei)
 
         # Matmul(weights, V)
         V = self.v(x) # (B, T, C)
-        out = out @ V # (B, T, T) @ (B, T, C) -> (B, T, C)
+        out = wei @ V # (B, T, T) @ (B, T, C) -> (B, T, C)
 
         return out
-
+    
