@@ -45,7 +45,8 @@ class AttentionHead(nn.Module):
         # Masking(weights)
         # Since this implementation is for the decoder, it is necessary to apply the 
         # masking on the "future" information, which means the tokens that are still to come.
-        # This implementation uses torch.tril()
+        # Karpathy's implementation uses the torch.register_buffer() function.
+        # TO DO: Explore which are the pros and cons of my current implementation
         tril = torch.ones(T, T).tril()
         wei = wei.masked_fill(tril == 0, float("-inf"))
 
