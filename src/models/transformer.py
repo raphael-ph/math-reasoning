@@ -82,12 +82,30 @@ class MultiHeadAttention(nn.Module):
         >>> "Multi-head attention allows the model to jointly attend to information from different representation \ 
         >>> subspaces at different positions. With a single attention head, averaging inhibits this."
         """
-        out = torch.cat([h(x) for h in self.heads], dim=-1) # concatenate over the last dim, Channels
+        out = torch.cat([h(x) for h in self.heads], dim=-1) # concatenate on the last dim, Channels
         # applying the linear projection, as stated by the authors
         out = self.linear(out)
         out = self.dropout(out)
 
         return out
 
+# --- Transformer Block ---
+class Block(nn.Module):
+    def __init__(self, n_heads: int, emb_dim: int):
+        super().__init__()
+        head_size = emb_dim//n_heads
 
-        
+        # "core" of the transformer
+        self.self_attention = MultiHeadAttention(n_heads, emb_dim, head_size)
+        self.ffwd = MLP(in_dim=emb_dim, out_dim=emb_dim, hidden_dim=4*emb_dim, hidden_layers=1) # simpe ffwd net
+
+        # normalization
+        self.layer_norm1 = nn.LayerNorm(emb_dim)
+        self.layer_norm2 = nn.LayerNorm(emb_dim)
+    
+    def forward(self, x):
+        # adding the skip connections
+        x = x + self.self_attention(self.layer_norm1(x))
+        x = x + self.ffwd(self.layer_norm2(x))
+
+        return x
