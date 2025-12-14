@@ -64,4 +64,30 @@ class AttentionHead(nn.Module):
         out = wei @ V # (B, T, T) @ (B, T, C) -> (B, T, C)
 
         return out
-    
+
+# --- Multi-Head Attention ---
+class MultiHeadAttention(nn.Module):
+    def __init__(self, n_heads: int, emb_dim: int, head_size: int, dropout: float = 0.2):
+        super().__init__()
+        self.heads = nn.ModuleList([AttentionHead(emb_dim, head_size) for _ in range(n_heads)])
+        self.linear = nn.Linear(emb_dim, emb_dim)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+        """Applying the Multi-Head Attention in parallel
+        
+        The idea is to run the attention mechanism on the input in parallel. With this implementation,
+        the net will learn different aspects of the input in each layer. As the authors state:
+
+        >>> "Multi-head attention allows the model to jointly attend to information from different representation \ 
+        >>> subspaces at different positions. With a single attention head, averaging inhibits this."
+        """
+        out = torch.cat([h(x) for h in self.heads], dim=-1) # concatenate over the last dim, Channels
+        # applying the linear projection, as stated by the authors
+        out = self.linear(out)
+        out = self.dropout(out)
+
+        return out
+
+
+        
