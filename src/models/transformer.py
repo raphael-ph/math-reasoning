@@ -12,6 +12,9 @@ import torch.nn.functional as F
 # internal imports
 from .common import MLP
 
+# setting up device
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+
 # --- Attention Head ---
 class AttentionHead(nn.Module):
     """Single head of Attention"""
@@ -114,3 +117,32 @@ class Block(nn.Module):
         x = x + self.ffwd(self.layer_norm2(x))
 
         return x
+
+# --- Transformer ---
+class Transformer(nn.Module):
+    def __init__(self, vocab_size: int, emb_dim: int, context_size: int, n_layers: int, n_heads):
+        super().__init__()
+        self.embeddings = nn.Embedding(vocab_size, emb_dim)
+        self.pos_encoding = nn.Embedding(context_size, emb_dim)
+        self.blocks = nn.Sequential(*[Block(n_heads, emb_dim) for _ in range(n_layers)])
+        self.layer_norm = nn.LayerNorm(emb_dim)
+        self.linear = nn.Linear(emb_dim, vocab_size)
+    
+    def forward(self, idx):
+        """Implementing the forward pass on the Transformer"""
+        # the input to the transformer are the tokens, shaped (B, T), where B is the
+        # batch size and T the temporal component (context window). As per the paper,
+        # tokens are converted into embeddings. 
+        B, T = idx.shape
+        token_embeddings = self.embeddings(idx) # (B, T) -> (B, T, C) adding the channels (embeddings) dim
+        # Generate the positional encoding embeddings. For this, we will simply initialize the embeddings
+        # with the size of the temporal component, which will provide us a form of representing the position that the words have in the sentence.
+        # The authors explain that since the transformer has no Recurrence nor Convolution, it is necessary to create means for the 
+        # model to use the sequence order, hence, the positional encoding:
+        # >>> "Since our model contains no recurrence and no convolution, in order for the model to make use of the order of the sequence, 
+        # >>> we must inject some information about the relative or absolute position of the tokens in the sequence.""
+        #
+        # In the paper, the authors use a Sine function to represent the positional encoding.
+        # TO DO: implement Sine PE
+        positional_encoding = self.pos_encoding(torch.arange(T, device=DEVICE)) # (B, T) -> (B, T, C) adds embeddings for the position
+        x = token_embeddings + positional_encoding
