@@ -149,4 +149,5 @@ class Transformer(nn.Module):
         x = self.blocks(x)
         x = self.layer_norm(x)
         logits = self.linear(x) # (B, T, C) -> (B, T, vocab_size)
+        pass # keep going
 
