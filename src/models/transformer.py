@@ -122,8 +122,11 @@ class Block(nn.Module):
 class Transformer(nn.Module):
     def __init__(self, vocab_size: int, emb_dim: int, context_size: int, n_layers: int, n_heads):
         super().__init__()
+        # variables
+        self.context_size = context_size
+
         self.embeddings = nn.Embedding(vocab_size, emb_dim)
-        self.pos_encoding = nn.Embedding(context_size, emb_dim)
+        self.pos_encoding = nn.Embedding(self.context_size, emb_dim)
         self.blocks = nn.Sequential(*[Block(n_heads, emb_dim) for _ in range(n_layers)])
         self.layer_norm = nn.LayerNorm(emb_dim)
         self.linear = nn.Linear(emb_dim, vocab_size)
@@ -164,3 +167,20 @@ class Transformer(nn.Module):
 
         return logits, loss
 
+    def generate(self, idx, max_new_tokens):
+        """Implementing the inference pass of the transformer"""
+        for _ in range(max_new_tokens):
+            B, T = idx.shape
+            # first, we crop the input tokens and select only the last tokens that fit on context size
+            idx_context = idx[:, -idx_context:]
+            # do a forward pass
+            logits = self.forward(idx_context) # (B, T, C)
+            # focus only on last time step
+            logits = logits[:, -1, :] # (B, C)
+            # softmax and sampling
+            probs = F.softmax(logits, dim=-1)
+            next_token = torch.multinomial(probs, 1)
+            # now we concatenate the next token on the sequence
+            idx = torch.cat((idx, next_token), dim=-1)
+
+        return idx
