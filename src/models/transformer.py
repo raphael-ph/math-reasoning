@@ -128,7 +128,7 @@ class Transformer(nn.Module):
         self.layer_norm = nn.LayerNorm(emb_dim)
         self.linear = nn.Linear(emb_dim, vocab_size)
     
-    def forward(self, idx):
+    def forward(self, idx, targets=None):
         """Implementing the forward pass on the Transformer"""
         # the input to the transformer are the tokens, shaped (B, T), where B is the
         # batch size and T the temporal component (context window). As per the paper,
@@ -149,5 +149,18 @@ class Transformer(nn.Module):
         x = self.blocks(x)
         x = self.layer_norm(x)
         logits = self.linear(x) # (B, T, C) -> (B, T, vocab_size)
-        pass # keep going
+        
+        # This logic allows us to use the forward pass for training and for generating:
+        # if targets are provided, the model will be trained. If targets are not passed, the model simply outputs
+        # the logits, which are then used on softmax.
+        if not targets:
+            loss = None
+        else:
+            B, T, C = logits.shape
+            logits = logits.view(B*T, C)
+            targets = targets.view(-1)
+
+            loss = F.cross_entropy(logits, targets)
+
+        return logits, loss
 
