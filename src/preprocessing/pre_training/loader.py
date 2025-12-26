@@ -112,4 +112,3 @@ class RepoLoader:
             except OSError as e:
                 _logger.info(f"Error during cleanup (could not delete {self.clone_dir}): {e}")
 
-

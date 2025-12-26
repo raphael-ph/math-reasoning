@@ -172,9 +172,9 @@ class Transformer(nn.Module):
         for _ in range(max_new_tokens):
             B, T = idx.shape
             # first, we crop the input tokens and select only the last tokens that fit on context size
-            idx_context = idx[:, -idx_context:]
+            idx_context = idx[:, -self.context_size:]
             # do a forward pass
-            logits = self.forward(idx_context) # (B, T, C)
+            logits, loss = self.forward(idx_context) # (B, T, C)
             # focus only on last time step
             logits = logits[:, -1, :] # (B, C)
             # softmax and sampling
@@ -183,4 +183,4 @@ class Transformer(nn.Module):
             # now we concatenate the next token on the sequence
             idx = torch.cat((idx, next_token), dim=-1)
 
-        return idx
+        return idx, loss

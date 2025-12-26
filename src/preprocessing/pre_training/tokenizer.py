@@ -27,11 +27,13 @@ SPECIAL_TOKENS = {
 _logger = get_logger(__name__, level="DEBUG")
 class Tokenizer:
     def __init__(self, 
-                 special_tokens: Dict[str, int], 
+                 special_tokens: Optional[Dict[str, int]] = None, 
                  pattern: Optional[str] = None, 
                  vocab_size: Optional[int] = None, 
                  num_merges: Optional[int] = None,
                  vocab_output_path: Optional[str] = None):
+        if not special_tokens:
+            special_tokens = SPECIAL_TOKENS
         self.special_tokens = special_tokens
         self.inv_special_tokens = self._invert_special_tokens(special_tokens)
         # split pattern
