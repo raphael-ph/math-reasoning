@@ -14,9 +14,15 @@ from typing import List
 # internal imports
 from ..utils.logger import get_logger
 
+# hugging face imports
+from datasets import load_dataset
+
 # set up logging
 _logger = get_logger("RepoLoader", level="DEBUG")
 
+# --- RepoLoader ---
+# A dataset loader for repositories. This clones into the target repo, extracts all information and 
+# generate an output file with all text.
 class RepoLoader:
     def __init__(self, repo_url: str,
                  clone_dir: str,
@@ -82,7 +88,7 @@ class RepoLoader:
             for file_path in file_paths:
                 try:
                     # Add a unique separator for better training context
-                    outfile.write(f"\n\n#### START_FILE: {file_path.name} ####\n\n")
+                    outfile.write(f"\n\n<|endoftext|>\n\n")
                     
                     content = file_path.read_text(encoding='utf-8')
                     outfile.write(content)
@@ -112,3 +118,64 @@ class RepoLoader:
             except OSError as e:
                 _logger.info(f"Error during cleanup (could not delete {self.clone_dir}): {e}")
 
+# --- Hugging Face Loader ---
+# This loads the target 
+class HuggingFaceLoader:
+    def __init__(self, dataset_name: str, 
+                 split: str, 
+                 output_file: str, 
+                 max_samples: int = 100_000,
+                 text_column: str = "text"):
+        """
+        Loads a dataset from Hugging Face and saves it to a .txt file.
+        
+        Parameters:
+            dataset_name: Name of the HF dataset (e.g., 'hoskinson-center/proof-pile')
+            split: Dataset split (e.g., 'train', 'validation')
+            output_file: Where to save the raw text
+            max_samples: Limit number of samples to prevent English from drowning out Lean
+            text_column: The key in the dictionary containing the actual text
+        """
+        self.dataset_name = dataset_name
+        self.split = split
+        self.output_file = output_file
+        self.max_samples = max_samples
+        self.text_column = text_column
+
+    def run(self):
+        _logger.info(f"Loading {self.dataset_name} [{self.split}] (Streaming mode)...")
+        
+        # Stream=True avoids downloading the entire TB-sized dataset
+        try:
+            dataset = load_dataset(self.dataset_name, split=self.split, streaming=True)
+        except Exception as e:
+            _logger.error(f"Failed to load dataset: {e}")
+            return
+
+        _logger.info(f"Extracting first {self.max_samples} samples...")
+        total_chars = 0
+        count = 0
+
+        with open(self.output_file, 'w', encoding='utf-8') as outfile:
+            for sample in dataset:
+                if count >= self.max_samples:
+                    break
+                
+                text = sample.get(self.text_column, "")
+                if not text: 
+                    continue
+                
+                # Add separator similar to RepoLoader
+                outfile.write(f"\n\n<|endoftext|>\n\n")
+                outfile.write(text)
+                
+                total_chars += len(text)
+                count += 1
+                
+                if count % 10000 == 0:
+                    _logger.info(f"Processed {count} samples...")
+
+        _logger.info(f"--- HF DATA EXTRACTION COMPLETE ---")
+        _logger.info(f"Total samples: {count}")
+        _logger.info(f"Total chars: {total_chars:,}")
+        _logger.info(f"Output: {self.output_file}")
