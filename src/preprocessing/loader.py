@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import List
 
 # internal imports
-from ...utils.logger import get_logger
+from ..utils.logger import get_logger
 
 # set up logging
 _logger = get_logger("RepoLoader", level="DEBUG")
