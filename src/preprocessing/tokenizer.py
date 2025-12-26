@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import Dict, Tuple, List, Optional
 
 # internal imports
-from ...utils.logger import get_logger
+from ..utils.logger import get_logger
 
 # globals
 VOCAB_SIZE = 12257 # GPT-2 vocab size for 10B tokens of trainig was 50000

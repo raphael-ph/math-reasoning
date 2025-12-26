@@ -1,6 +1,6 @@
 import torch
 from src.models.transformer import Transformer
-from src.preprocessing.pre_training.tokenizer import Tokenizer
+from src.preprocessing.tokenizer import Tokenizer
 
 # Tokenizer
 tokenizer = Tokenizer()

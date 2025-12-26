@@ -1,4 +1,4 @@
-from src.preprocessing.pre_training.loader import RepoLoader
+from src.preprocessing.loader import RepoLoader
 
 def main():
     # --- Example Usage ---
