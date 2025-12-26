@@ -179,3 +179,51 @@ class HuggingFaceLoader:
         _logger.info(f"Total samples: {count}")
         _logger.info(f"Total chars: {total_chars:,}")
         _logger.info(f"Output: {self.output_file}")
+
+
+class CorpusBlender:
+    def __init__(self, file_a: str, file_b: str, output_file: str, block_size: int = 2048):
+        """
+        Reads two massive text files and interleaves their content into a single training corpus.
+        
+        Parameters:
+            file_a: Path to Lean Corpus
+            file_b: Path to Proof-Pile Corpus
+            output_file: Final training file
+            block_size: Approximate chunk size to read/write at a time (in chars)
+        """
+        self.file_a = file_a
+        self.file_b = file_b
+        self.output_file = output_file
+        self.block_size = block_size # Read 2KB chunks at a time
+
+    def run(self):
+        _logger.info(f"Blending {self.file_a} and {self.file_b}...")
+        
+        with open(self.file_a, 'r', encoding='utf-8') as fa, \
+             open(self.file_b, 'r', encoding='utf-8') as fb, \
+             open(self.output_file, 'w', encoding='utf-8') as fout:
+            
+            # Simple interleaving strategy:
+            # Read a chunk from A, write it. Read a chunk from B, write it.
+            # Ideally, you'd buffer and shuffle, but for simple pre-training,
+            # strict interleaving often works well enough to mix the distribution.
+            
+            while True:
+                chunk_a = fa.read(self.block_size)
+                chunk_b = fb.read(self.block_size)
+                
+                if not chunk_a and not chunk_b:
+                    break # Both files done
+                
+                if chunk_a:
+                    fout.write(chunk_a)
+                    # Add a newline buffer if chunk doesn't end with one
+                    if not chunk_a.endswith('\n'): fout.write('\n')
+                
+                if chunk_b:
+                    fout.write(chunk_b)
+                    if not chunk_b.endswith('\n'): fout.write('\n')
+
+        _logger.info(f"--- BLENDING COMPLETE ---")
+        _logger.info(f"Final Training Corpus: {self.output_file}")
