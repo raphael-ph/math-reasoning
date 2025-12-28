@@ -18,7 +18,7 @@ from ..utils.logger import get_logger
 from datasets import load_dataset
 
 # set up logging
-_logger = get_logger("RepoLoader", level="DEBUG")
+_logger = get_logger("loader", level="DEBUG")
 
 # --- RepoLoader ---
 # A dataset loader for repositories. This clones into the target repo, extracts all information and 
@@ -44,7 +44,7 @@ class RepoLoader:
         """
         self.repo_url = repo_url
         self.clone_dir = clone_dir
-        self.output_file = output_file
+        self.output_file = Path(output_file)
         self.delete_after = delete_after
         self.file_extension = file_extension
         # Use Pathlib to construct the path where the main code files reside
@@ -84,6 +84,8 @@ class RepoLoader:
         _logger.info(f"Writing contents of {len(file_paths)} files to '{self.output_file}'...")
         total_chars = 0
         
+        self.output_file.touch(exist_ok=True)
+
         with open(self.output_file, 'w', encoding='utf-8') as outfile:
             for file_path in file_paths:
                 try:
@@ -138,7 +140,7 @@ class HuggingFaceLoader:
         """
         self.dataset_name = dataset_name
         self.split = split
-        self.output_file = output_file
+        self.output_file = Path(output_file)
         self.max_samples = max_samples
         self.text_column = text_column
 
@@ -147,7 +149,7 @@ class HuggingFaceLoader:
         
         # Stream=True avoids downloading the entire TB-sized dataset
         try:
-            dataset = load_dataset(self.dataset_name, split=self.split, streaming=True)
+            dataset = load_dataset(self.dataset_name, split=self.split, streaming=True, trust_remote_code=True)
         except Exception as e:
             _logger.error(f"Failed to load dataset: {e}")
             return
@@ -155,6 +157,8 @@ class HuggingFaceLoader:
         _logger.info(f"Extracting first {self.max_samples} samples...")
         total_chars = 0
         count = 0
+
+        self.output_file.touch(exist_ok=True)
 
         with open(self.output_file, 'w', encoding='utf-8') as outfile:
             for sample in dataset:
@@ -182,48 +186,85 @@ class HuggingFaceLoader:
 
 
 class CorpusBlender:
-    def __init__(self, file_a: str, file_b: str, output_file: str, block_size: int = 2048):
+    def __init__(self, file_a: str, file_b: str, output_file: str, separator: str = "<|endoftext|>"):
         """
-        Reads two massive text files and interleaves their content into a single training corpus.
+        Reads two massive text files and interleaves them SAMPLE BY SAMPLE.
         
         Parameters:
             file_a: Path to Lean Corpus
             file_b: Path to Proof-Pile Corpus
             output_file: Final training file
-            block_size: Approximate chunk size to read/write at a time (in chars)
+            separator: The delimiter used to split samples
         """
         self.file_a = file_a
         self.file_b = file_b
-        self.output_file = output_file
-        self.block_size = block_size # Read 2KB chunks at a time
+        self.output_file = Path(output_file)
+        self.separator = separator
+
+    def _sample_generator(self, file_path):
+        """
+        A generator that yields complete samples one by one from a massive file.
+        It reads in chunks but buffers them to ensure we only yield at separators.
+        """
+        self.output_file.touch(exist_ok=True)
+        with open(file_path, 'r', encoding='utf-8') as f:
+            buffer = ""
+            while True:
+                chunk = f.read(4096 * 4) # Read big chunks for efficiency
+                if not chunk:
+                    break
+                buffer += chunk
+                
+                # While we have at least one separator in the buffer, we can extract samples
+                while self.separator in buffer:
+                    # Split at the first occurrence
+                    sample, buffer = buffer.split(self.separator, 1)
+                    
+                    # Clean up whitespace if necessary, but keep the separator logic clear
+                    if sample.strip(): 
+                        yield sample.strip()
+            
+            # Yield any remaining content
+            if buffer.strip():
+                yield buffer.strip()
 
     def run(self):
         _logger.info(f"Blending {self.file_a} and {self.file_b}...")
         
-        with open(self.file_a, 'r', encoding='utf-8') as fa, \
-             open(self.file_b, 'r', encoding='utf-8') as fb, \
-             open(self.output_file, 'w', encoding='utf-8') as fout:
+        # Create generators for both files
+        gen_a = self._sample_generator(self.file_a)
+        gen_b = self._sample_generator(self.file_b)
+        
+        count_a = 0
+        count_b = 0
+        
+        with open(self.output_file, 'w', encoding='utf-8') as fout:
+            active_a, active_b = True, True
             
-            # Simple interleaving strategy:
-            # Read a chunk from A, write it. Read a chunk from B, write it.
-            # Ideally, you'd buffer and shuffle, but for simple pre-training,
-            # strict interleaving often works well enough to mix the distribution.
-            
-            while True:
-                chunk_a = fa.read(self.block_size)
-                chunk_b = fb.read(self.block_size)
+            while active_a or active_b:
+                # Try to get a sample from A
+                if active_a:
+                    try:
+                        sample_a = next(gen_a)
+                        fout.write(self.separator + "\n" + sample_a + "\n")
+                        count_a += 1
+                    except StopIteration:
+                        active_a = False
                 
-                if not chunk_a and not chunk_b:
-                    break # Both files done
-                
-                if chunk_a:
-                    fout.write(chunk_a)
-                    # Add a newline buffer if chunk doesn't end with one
-                    if not chunk_a.endswith('\n'): fout.write('\n')
-                
-                if chunk_b:
-                    fout.write(chunk_b)
-                    if not chunk_b.endswith('\n'): fout.write('\n')
+                # Try to get a sample from B
+                if active_b:
+                    try:
+                        sample_b = next(gen_b)
+                        fout.write(self.separator + "\n" + sample_b + "\n")
+                        count_b += 1
+                    except StopIteration:
+                        active_b = False
+
+            # Get final file size
+            total_size = fout.tell()
 
         _logger.info(f"--- BLENDING COMPLETE ---")
-        _logger.info(f"Final Training Corpus: {self.output_file}")
+        _logger.info(f"Samples from Lean: {count_a}")
+        _logger.info(f"Samples from English: {count_b}")
+        _logger.info(f"Final Size: {total_size:,} bytes")
+        _logger.info(f"Output: {self.output_file}")
