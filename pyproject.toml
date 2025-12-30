@@ -11,4 +11,5 @@ dependencies = [
     "torch==2.2.2",
     "tqdm>=4.67.1",
     "transformers>=4.57.1",
+    "vastai-sdk>=0.2.6",
 ]

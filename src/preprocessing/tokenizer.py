@@ -89,8 +89,7 @@ class Tokenizer:
             ids = [self._merge(chunk_ids, top_pair, idx) for chunk_ids in ids]
             merges[top_pair] = idx
             vocab[idx] = vocab[top_pair[0]] + vocab[top_pair[1]]
-            if verbose:
-                _logger.info(f"merge {i+1}/{self.num_merges}: {top_pair} -> {idx} ({vocab[idx]}) had {stats[top_pair]} occurrences")
+            _logger.info(f"merge {i+1}/{self.num_merges}: {top_pair} -> {idx} ({vocab[idx]}) had {stats[top_pair]} occurrences")
         
         # Tokenization completion
         _logger.info(f"Tokenization completed!")
@@ -265,7 +264,7 @@ class Tokenizer:
         
         This function is a direct reference to Karpathy's implementation. It
         is designed as a helper function that will encode chunks exclusively. Only change
-        is that it reeceives the byte text.
+        is that it receives the byte text.
 
         Args:
             text_bytes (bytes): Byte text representation

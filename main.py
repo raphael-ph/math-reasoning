@@ -1,10 +1,19 @@
 # internal imports
 from src.utils.logger import get_logger
 from src.preprocessing.loader import RepoLoader, HuggingFaceLoader, CorpusBlender
+from src.preprocessing.tokenizer import Tokenizer
 
 logger = get_logger("main", level="INFO")
 
-def main():
+def train_tokenizer():
+    '''Training the tokenizer'''
+    CORPUS_PATH = "data/corpus/final_training_corpus.txt"
+    tokenizer = Tokenizer()
+    with open(CORPUS_PATH, "r") as f:
+        text = f.read()
+        tokenizer.train(text)
+
+def generate_corpus():
     # Configuration
     LEAN_OUTPUT = "data/raw/corpus_lean_raw.txt"
     NL_OUTPUT = "data/raw/corpus_english_raw.txt"
@@ -41,4 +50,4 @@ def main():
     logger.info("\nREADY FOR TOKENIZER TRAINING!")
 
 if __name__ == "__main__":
-    main()
+    train_tokenizer()
