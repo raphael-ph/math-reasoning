@@ -56,53 +56,73 @@ def train_tokenizer_remote():
                                                )
         instance_id = instance['new_contract']
         
-        # --- WAIT FOR READY ---
-        _logger.info(f"Rented {instance_id}. Waiting for 'running' status...")
+        # --- WAIT FOR READY & GET IP/PORT ---
+        _logger.info(f"Waiting for instance {instance_id} to initialize...")
+        ssh_host, ssh_port = None, None
         while True:
-            status = vast_client.show_instance(id=instance_id)
-            if status.get('actual_status') == 'running':
+            inst = vast_client.show_instance(id=instance_id)
+            # We need the actual status AND the network info to be populated
+            if inst.get('actual_status') == 'running' and inst.get('ssh_host'):
+                ssh_host = inst['ssh_host']
+                ssh_port = inst['ssh_port']
                 break
-            time.sleep(10)
+            time.sleep(5)
         
-        # --- ATTACH SSH KEY ---
-        _logger.info(f"Attaching SSH Key to instance {instance_id}...")
-        ssh_key = vast_client.show_ssh_keys()[0]["public_key"] # I currently only have one key on VastAI, so I am retrieving it and attaching to the rented machine
-        try:
-            vast_client.attach_ssh(instance_id=instance_id, ssh_key=ssh_key)
-            _logger.info(f"Successfully attached SSH key to instance {instance_id}")
-        except Exception as e:
-            _logger.error(f"Failed to attach SSH key to instnace {instance_id}: {e}")
-            raise
+        _logger.info(f"Connected to {ssh_host}:{ssh_port}")
+        time.sleep(5) # Let the container's SSH service settle
 
-        # --- COPY FILES (Native SDK) ---
-        _logger.info("Syncing files using SDK copy...")
-        # SDK copy: src can be local folder, dst is 'instance_id:/path'
-        vast_client.copy(
-            src="./", 
-            dst=f"{instance_id}:/workspace/", 
-            identity=ssh_key
-        )
+        # --- SYNC FILES (Direct SCP) ---
+        _logger.info("Syncing files via Rsync (filtering junk)...")
+        
+        # Define what to ignore
+        excludes = [
+            "--exclude=__pycache__",
+            "--exclude=*.pyc",
+            "--exclude=.git",
+            "--exclude=.venv",
+            "--exclude=venv",
+            "--exclude=*.log",
+            "--exclude=.env",
+            "--exclude=.pytest_cache",
+            "--exclude=bin/",
+            "--exclude=lib/",
+            "--exclude=include/",
+            "--exclude=data/vocab/*" # Don't upload old results if they exist locally
+        ]
 
-        # --- EXECUTE COMMANDS (Native SDK) ---
+        rsync_cmd = [
+            "rsync", "-avz",
+            "--progress",
+            "-e", f"ssh -p {ssh_port} -i {full_ssh_path} -o StrictHostKeyChecking=no",
+            *excludes,
+            "./", 
+            f"root@{ssh_host}:/workspace/"
+        ]
+        
+        _logger.info("Running rsync...")
+        subprocess.run(rsync_cmd, check=True)
+
+        # --- EXECUTE COMMANDS (Direct SSH) ---
         _logger.info("Starting remote execution...")
-        
         remote_script = (
+            "cd /workspace && "
             "curl -LsSf https://astral.sh/uv/install.sh | sh && "
-            "source $HOME/.cargo/env && "
-            "uv pip install --system -r /workspace/requirements.txt && "
-            "python /workspace/remote_entrypoint.py"
+            "source $HOME/.local/bin/env && "  # <--- Changed from .cargo/env
+            "uv pip install --system -r requirements.txt && "
+            "python remote_entrypoint.py"
         )
-
-        # The execute method runs the command and returns the output
-        result = vast_client.execute(id=instance_id, COMMAND=remote_script)
-        _logger.info(f"Remote Output: {result}")
-
-        # --- DOWNLOAD RESULTS ---
-        vast_client.copy(
-            src=f"{instance_id}:/workspace/data/vocab/", 
-            dst="./data/vocab/", 
-            identity=ssh_key
-        )
+        
+        ssh_cmd = [
+            "ssh",
+            "-p", str(ssh_port),
+            "-i", full_ssh_path,
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            f"root@{ssh_host}",
+            remote_script
+        ]
+        # Using subprocess.run will stream the output directly to your console
+        subprocess.run(ssh_cmd, check=True)
     except Exception as e:
         _logger.error(f"Failed to launch remote training job: {e}")
     finally:
