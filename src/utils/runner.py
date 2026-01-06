@@ -48,7 +48,7 @@ def train_tokenizer_remote():
         offer = vast_client.search_offers(query='gpu_name=RTX_5090 rented=False', order="dph_total")[0]
         _logger.info(f"Found offer: {offer['gpu_name']} | ID: {offer['id']} ($ {offer['dph_total']:.2f}/hr) located at {offer['geolocation']}. Renting...")
         instance = vast_client.launch_instance(id=offer['id'], 
-                                               image="pytorch/pytorch", 
+                                               image="vastai/vllm:v0.10.2-cuda-12.9-pytorch-2.8.0-py312", 
                                                disk=20, # GB
                                                gpu_name='RTX_5090',
                                                num_gpus='1',
@@ -106,10 +106,11 @@ def train_tokenizer_remote():
         _logger.info("Starting remote execution...")
         remote_script = (
             "cd /workspace && "
-            "curl -LsSf https://astral.sh/uv/install.sh | sh && "
-            "source $HOME/.local/bin/env && "  # <--- Changed from .cargo/env
-            "uv pip install --system -r requirements.txt && "
-            "python remote_entrypoint.py"
+            # "curl -LsSf https://astral.sh/uv/install.sh | sh && "
+            # "source $HOME/.local/bin/env && "  # <--- Changed from .cargo/env
+            # "uv pip install --system -r requirements.txt && "
+            "pip3 install -r requirements.txt &&"
+            "python3 remote_entrypoint.py"
         )
         
         ssh_cmd = [
