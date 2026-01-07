@@ -106,7 +106,7 @@ def train_tokenizer_remote():
         _logger.info("Starting remote execution...")
         remote_script = (
             "cd /workspace && "
-            "python3 -m venv .venv && source .venv/bin/activate &&" # creating a venv shall be the easiest way
+            "python3 -m venv .venv && source .venv/bin/activate &&" # creating a venv is the easiest way that I thought fast to manage dependencies mismatch
             "pip3 install -r requirements.txt &&"
             "python3 remote_entrypoint.py"
         )
