@@ -106,9 +106,7 @@ def train_tokenizer_remote():
         _logger.info("Starting remote execution...")
         remote_script = (
             "cd /workspace && "
-            # "curl -LsSf https://astral.sh/uv/install.sh | sh && "
-            # "source $HOME/.local/bin/env && "  # <--- Changed from .cargo/env
-            # "uv pip install --system -r requirements.txt && "
+            "python3 -m venv .venv && source .venv/bin/activate &&" # creating a venv shall be the easiest way
             "pip3 install -r requirements.txt &&"
             "python3 remote_entrypoint.py"
         )
