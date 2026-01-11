@@ -21,53 +21,55 @@ _logger = get_logger(__name__, level="DEBUG")
 
 # --- WORKER FUNCTION ---
 def worker_loop(rank: int, chunk_ids: List[List[int]], cmd_queue, res_queue):
-    """
-    Stateful worker that holds data in memory and listens for commands.
-    """
     try:
         while True:
-            # Wait for a command from the main process
-            # Command structure: (cmd_type, payload)
             cmd, payload = cmd_queue.get()
             
             if cmd == 'stats':
-                # Calculate stats for the local chunk
                 stats = defaultdict(int)
                 for chunk in chunk_ids:
-                    # Iterate locally without overhead
+                    # OPTIMIZATION: Check len once
+                    if len(chunk) < 2: continue
+                    # Fast iteration
                     for pair in zip(chunk, chunk[1:]):
                         stats[pair] += 1
                 res_queue.put(dict(stats))
                 
             elif cmd == 'merge':
-                # Perform merge in-place on the local data
                 pair, idx = payload
                 p0, p1 = pair
                 
-                # We iterate through our local list of chunks and update them
+                # Iterate and merge
                 for i, chunk in enumerate(chunk_ids):
+                    if len(chunk) < 2: continue
+                    
                     new_chunk = []
                     j = 0
                     n = len(chunk)
                     while j < n:
+                        # Safety check for bounds
                         if j < n - 1 and chunk[j] == p0 and chunk[j+1] == p1:
                             new_chunk.append(idx)
                             j += 2
                         else:
                             new_chunk.append(chunk[j])
                             j += 1
-                    chunk_ids[i] = new_chunk # Update in place
+                    chunk_ids[i] = new_chunk
                 
-                res_queue.put(True) # Signal completion
+                res_queue.put(True)
                 
             elif cmd == 'stop':
                 break
     except Exception as e:
-        # If something crashes, send the error back so main process doesn't hang
-        res_queue.put(e)
+        # Send error and properly exit
+        try:
+            res_queue.put(e)
+        except:
+            pass # Queue might be closed
 
 # --- MAIN CLASS ---
 class Tokenizer:
+    # ... (Your __init__ remains the same) ...
     def __init__(self, 
                  special_tokens: Optional[Dict[str, int]] = None, 
                  pattern: Optional[str] = None, 
@@ -96,33 +98,31 @@ class Tokenizer:
             else:
                 os.mkdir(vocab_path)
                 self.vocab_output_path = vocab_path
-    
+
     def train(self, text, verbose: bool=False):
-        """Train the tokenizer using persistent workers"""
+        """Train the tokenizer using persistent workers with RAM protection"""
         
         _logger.info("Splitting text...")
         text_chunks = re.findall(self.pattern, text)
         ids = [list(ch.encode("utf-8")) for ch in text_chunks]
         
-        # Determine workers
-        max_workers = max(1, os.cpu_count() - 1)
-        _logger.info(f"Distributing data across {max_workers} processes...")
+        # --- CRITICAL FIX 1: Limit Workers to save RAM ---
+        # Even if you have 100 CPUs, using them all will explode RAM due to Copy-On-Write
+        available_cpus = os.cpu_count()
+        # Cap at 8 workers to prevent RAM explosion. Increase only if you have 500GB+ RAM.
+        max_workers = min(8, available_cpus - 1) 
+        max_workers = max(1, max_workers) # Ensure at least 1
+        
+        _logger.info(f"Distributing data across {max_workers} processes (Capped to save RAM)...")
 
-        # Split data into chunks for each worker
-        # We split the list 'ids' into 'max_workers' parts
         chunk_size = (len(ids) + max_workers - 1) // max_workers
         id_batches = [ids[i:i + chunk_size] for i in range(0, len(ids), chunk_size)]
         
-        # Setup Queues
-        # We need one command queue per worker (or one shared) and one result queue
-        # Using a list of command queues is safer to ensure order if needed, but one shared is fine here.
-        # Actually, separate cmd queues are better to distribute the 'stop' signal cleanly or handle crashes.
         cmd_queues = [multiprocessing.Queue() for _ in range(max_workers)]
         res_queue = multiprocessing.Queue()
         
         processes = []
         for i in range(max_workers):
-            # Handle case where we have more cores than data batches
             if i < len(id_batches):
                 p = multiprocessing.Process(
                     target=worker_loop, 
@@ -131,7 +131,6 @@ class Tokenizer:
                 p.start()
                 processes.append(p)
             else:
-                # Close unused queues
                 cmd_queues[i].close()
 
         active_workers = len(processes)
@@ -142,14 +141,20 @@ class Tokenizer:
 
         try:
             for i in range(self.num_merges):
-                # BROADCAST STATS REQUEST
+                # 1. BROADCAST STATS
                 for q in cmd_queues[:active_workers]:
                     q.put(('stats', None))
                 
-                # AGGREGATE STATS
+                # 2. AGGREGATE STATS (With Timeouts)
                 global_stats = defaultdict(int)
                 for _ in range(active_workers):
-                    res = res_queue.get()
+                    try:
+                        # --- CRITICAL FIX 2: Timeout ---
+                        # If a worker dies, this will raise Empty after 60s instead of freezing forever
+                        res = res_queue.get(timeout=600) 
+                    except multiprocessing.queues.Empty:
+                        raise RuntimeError("Worker process timed out. Likely OOM Kill.")
+                    
                     if isinstance(res, Exception):
                         raise res
                     for pair, count in res.items():
@@ -158,22 +163,23 @@ class Tokenizer:
                 if not global_stats:
                     break
 
-                # FIND BEST PAIR
                 top_pair = max(global_stats, key=global_stats.get)
                 idx = 256 + i
                 
-                # BROADCAST MERGE REQUEST
+                # 3. BROADCAST MERGE
                 for q in cmd_queues[:active_workers]:
                     q.put(('merge', (top_pair, idx)))
                 
-                # WAIT FOR CONFIRMATION
-                # We must wait for all workers to finish merging before next loop
+                # 4. WAIT FOR CONFIRMATION
                 for _ in range(active_workers):
-                    res = res_queue.get()
+                    try:
+                        res = res_queue.get(timeout=600)
+                    except multiprocessing.queues.Empty:
+                        raise RuntimeError("Worker stuck during merge. Check RAM usage.")
+                    
                     if isinstance(res, Exception):
                         raise res
                 
-                # Record result
                 merges[top_pair] = idx
                 vocab[idx] = vocab[top_pair[0]] + vocab[top_pair[1]]
                 
@@ -182,13 +188,16 @@ class Tokenizer:
 
         except Exception as e:
             _logger.error(f"Training crashed: {e}")
+            raise e # Re-raise so you see the error
         finally:
-            # CLEANUP
             _logger.info("Stopping workers...")
             for q in cmd_queues[:active_workers]:
                 q.put(('stop', None))
             for p in processes:
-                p.join()
+                # Force kill if they don't exit quickly
+                p.join(timeout=5)
+                if p.is_alive():
+                    p.terminate()
 
         _logger.info(f"Tokenization completed!")
         self.merges = merges

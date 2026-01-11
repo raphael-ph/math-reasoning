@@ -45,7 +45,7 @@ def train_tokenizer_remote():
     try:
         # --- RENTING ---
         # searches for the cheapest rentable GPU (dph = dollars per hour)
-        offer = vast_client.search_offers(query='gpu_name=RTX_5090 rented=False', order="dph_total")[0]
+        offer = vast_client.search_offers(query='cpu_ram>128 disk_space>100 reliability>0.98', order="dph_total")[0]
         _logger.info(f"Found offer: {offer['gpu_name']} | ID: {offer['id']} ($ {offer['dph_total']:.2f}/hr) located at {offer['geolocation']}. Renting...")
         instance = vast_client.launch_instance(id=offer['id'], 
                                                image="vastai/vllm:v0.10.2-cuda-12.9-pytorch-2.8.0-py312", 
