@@ -1,5 +1,6 @@
 # internal imports
 from src.utils.logger import get_logger
+from src.preprocessing.hf_tokenizer import train_fast_tokenizer
 from src.preprocessing.loader import RepoLoader, HuggingFaceLoader, CorpusBlender
 from src.utils.runner import train_tokenizer_remote
 
@@ -42,4 +43,4 @@ def generate_corpus():
     logger.info("\nREADY FOR TOKENIZER TRAINING!")
 
 if __name__ == "__main__":
-    train_tokenizer_remote()
+    train_fast_tokenizer()
