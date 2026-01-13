@@ -2,11 +2,13 @@
 # This is the base structure for training AI Models. Since I'll be training some models in this repo, 
 # I thought it would be nice to design a common trainer that could be used to manage all my model training workflows.
 
+from abc import abstractmethod
+
 from pydantic import BaseModel, Field
 
 # torch imports
 import torch.nn as nn
-from torch.utils.data import DataLoader
+from torch.utils.data import Dataset
 from torch.optim import Optimizer
 
 class BaseTrainerConfig(BaseModel):
@@ -30,5 +32,9 @@ class BaseTrainerConfig(BaseModel):
 class BaseTrainer(BaseModel):
     """Base Trainer class, implements the abstract methods for the trainers"""
     model: nn.Module = Field(..., description="Model targeted to train.")
-    dataloader: DataLoader = Field(..., description="Torch DataLoader that will be used to train the model")
+    dataset: Dataset = Field(..., description="Torch Dataset that will be used to train the model")
     config: BaseTrainerConfig = Field(..., description="Training run configuration hyperparamters")
+
+    @abstractmethod
+    def train(self):
+        raise NotImplementedError
