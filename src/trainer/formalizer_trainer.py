@@ -5,7 +5,7 @@
 from pathlib import Path
 
 # internal methods
-# from .base import BaseTrainer, BaseTrainerConfig
+from .base import BaseTrainer, BaseTrainerConfig
 from ..preprocessing.hf_tokenizer import Tokenizer
 from ..utils.logger import get_logger
 

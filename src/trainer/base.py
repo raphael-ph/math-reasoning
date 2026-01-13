@@ -4,7 +4,7 @@
 
 from abc import abstractmethod
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 # torch imports
 import torch.nn as nn
@@ -12,6 +12,9 @@ from torch.utils.data import Dataset
 from torch.optim import Optimizer
 
 class BaseTrainerConfig(BaseModel):
+    # necessary because the torch.optim.Optimizer is not a pydantic model
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     # these are the data hyperparameters
     vocab_size: int = Field(..., description="Size of the vocabulary")
     context_size: int = Field(..., description="Context window size")
@@ -31,6 +34,8 @@ class BaseTrainerConfig(BaseModel):
 
 class BaseTrainer(BaseModel):
     """Base Trainer class, implements the abstract methods for the trainers"""
+    # necessary because the torch.nn.Module and torch.utils.data.Datasert are not a pydantic models
+    model_config = ConfigDict(arbitrary_types_allowed=True)
     model: nn.Module = Field(..., description="Model targeted to train.")
     dataset: Dataset = Field(..., description="Torch Dataset that will be used to train the model")
     config: BaseTrainerConfig = Field(..., description="Training run configuration hyperparamters")
