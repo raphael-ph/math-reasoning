@@ -7,6 +7,7 @@ from abc import abstractmethod
 from pydantic import BaseModel, Field, ConfigDict
 
 # torch imports
+import torch
 import torch.nn as nn
 from torch.utils.data import Dataset
 from torch.optim import Optimizer
@@ -31,6 +32,9 @@ class BaseTrainerConfig(BaseModel):
     n_layer: int = Field(..., description="Number of layers")
     dropout: float = Field(..., description="Amount of dropout on the net")
     learning_rate: float = Field(..., description="Optimizer learning rate")
+
+    # hardware
+    device: str = Field("cuda" if torch.cuda.is_available() else "cpu", description="Device to train on")
 
 class BaseTrainer(BaseModel):
     """Base Trainer class, implements the abstract methods for the trainers"""
