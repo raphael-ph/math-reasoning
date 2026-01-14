@@ -3,11 +3,10 @@
 # checkpoints, best model, etc. This will rely havily on MLflow SDK: https://mlflow.org/docs/latest/ml/deep-learning/pytorch/
 
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Optional
 
 # internal methods
-from .base import BaseTrainer, BaseTrainerConfig
-from ..preprocessing.hf_tokenizer import Tokenizer
+from .base import BaseTrainer
 from ..utils.logger import get_logger
 
 # torch imports
