@@ -23,6 +23,7 @@ class BaseTrainerConfig(BaseModel):
     max_iters: int = Field(..., description="Max number of training steps")
     eval_interval: int = Field(...,  description="Interval for making a run of evaluation")
     eval_iter: int = Field(..., description="Max number of eval steps")
+    batch_size: int = Field(..., description="Batch size for the training job")
 
     # model training hyperparameters
     n_embeddings: int = Field(..., description="Embedding size")
