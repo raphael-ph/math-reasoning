@@ -52,7 +52,7 @@ class FormalizerTrainer(BaseTrainer):
     _train_dataloader: Optional[DataLoader] = None
     _val_dataloader: Optional[DataLoader] = None
 
-    def model_post_init(self):
+    def model_post_init(self, __context):
         self.model.to(self.config.device)
 
     def _setup_dataloaders(self):
