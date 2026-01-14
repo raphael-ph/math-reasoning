@@ -30,14 +30,14 @@ class BaseTrainerConfig(BaseModel):
     n_layer: int = Field(..., description="Number of layers")
     dropout: float = Field(..., description="Amount of dropout on the net")
     learning_rate: float = Field(..., description="Optimizer learning rate")
-    criterion: Optimizer = Field(..., description="Optimizer")
 
 class BaseTrainer(BaseModel):
     """Base Trainer class, implements the abstract methods for the trainers"""
     # necessary because the torch.nn.Module and torch.utils.data.Datasert are not a pydantic models
     model_config = ConfigDict(arbitrary_types_allowed=True)
     model: nn.Module = Field(..., description="Model targeted to train.")
-    dataset: Dataset = Field(..., description="Torch Dataset that will be used to train the model")
+    train_dataset: Dataset = Field(..., description="Torch Dataset that will be used to train the model")
+    val_dataset: Dataset = Field(..., description="Torch Dataset that will be used to train the model")
     config: BaseTrainerConfig = Field(..., description="Training run configuration hyperparamters")
 
     @abstractmethod
