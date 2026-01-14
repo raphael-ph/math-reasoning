@@ -5,8 +5,12 @@
 from pathlib import Path
 from typing import Optional
 
+# mlflow imports
+import mlflow
+from mlflow.models import infer_signature
+
 # internal methods
-from .base import BaseTrainer
+from .base import BaseTrainer, BaseTrainerConfig
 from ..utils.logger import get_logger
 
 # torch imports
@@ -34,9 +38,7 @@ class FormalizerDataset(Dataset):
         start_idx = index * self.context_size
         end_idx = start_idx + self.context_size
         
-        # Validation to ensure we don't go out of bounds
         if end_idx + 1 > len(self.data):
-             # Handle edge case or resize last batch
              start_idx = len(self.data) - self.context_size - 1
              end_idx = start_idx + self.context_size
 
@@ -45,9 +47,7 @@ class FormalizerDataset(Dataset):
         
         return input_ids, target_ids
 
-# --- Formalizer Trainer ---
 class FormalizerTrainer(BaseTrainer):
-    # We keep dataloaders as private attributes to avoid Pydantic validation issues
     _train_dataloader: Optional[DataLoader] = None
     _val_dataloader: Optional[DataLoader] = None
 
@@ -55,13 +55,12 @@ class FormalizerTrainer(BaseTrainer):
         self.model.to(self.config.device)
 
     def _setup_dataloaders(self):
-        """Initialize dataloaders once to avoid overhead."""
         self._train_dataloader = DataLoader(
             dataset=self.train_dataset,
             batch_size=self.config.batch_size,
             shuffle=True,
             num_workers=4,
-            pin_memory=True # Faster transfer to CUDA
+            pin_memory=True
         )
         self._val_dataloader = DataLoader(
             dataset=self.val_dataset,
@@ -74,46 +73,80 @@ class FormalizerTrainer(BaseTrainer):
     def train(self):
         self._setup_dataloaders()
         optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.config.learning_rate)
-        
-        # Create an infinite iterator for the training loop
         train_iter = iter(self._train_dataloader)
         
-        _logger.info(f"Starting training on {self.config.device}...")
+        # Setup MLflow
+        mlflow.set_tracking_uri("file:./mlruns")
+        mlflow.set_experiment("Formalizer_Training")
         
-        for i in range(self.config.max_iters):
-            # batch fetching
-            try:
-                xb, yb = next(train_iter)
-            except StopIteration:
-                # Restart iterator if dataset is exhausted
-                train_iter = iter(self._train_dataloader)
-                xb, yb = next(train_iter)
+        # we define how often to save the heavy model files.
+        # This prevents saving a model every time you eval.
+        checkpoint_interval = getattr(self.config, "checkpoint_interval", 1000)
 
-            # Move data to device
-            xb = xb.to(self.config.device)
-            yb = yb.to(self.config.device)
+        _logger.info(f"Starting training on {self.config.device}...")
+
+        # Disable autologging for models so we can manually control checkpoint naming/frequency
+        mlflow.pytorch.autolog(log_models=False, silent=True)
+
+        with mlflow.start_run() as run:
+            # Log config parameters
+            mlflow.log_params(self.config.model_dump())
             
-            # Evaluation
-            if i % self.config.eval_interval == 0 and i > 0:
-                losses = self._estimate_loss()
-                _logger.info(f"Step {i}: train loss: {losses['train']:.4f}, val loss: {losses['val']:.4f}")
-            
-            # Forward pass & Optimization
-            logits, loss = self.model(xb, yb)
-            optimizer.zero_grad(set_to_none=True)
-            loss.backward()
-            optimizer.step()
+            for i in range(self.config.max_iters):
+                # Fetch Batch
+                try:
+                    xb, yb = next(train_iter)
+                except StopIteration:
+                    train_iter = iter(self._train_dataloader)
+                    xb, yb = next(train_iter)
+
+                xb, yb = xb.to(self.config.device), yb.to(self.config.device)
+                
+                # Evaluation & Logging Loop
+                if i % self.config.eval_interval == 0 and i > 0:
+                    losses = self._estimate_loss()
+                    train_loss = losses['train']
+                    val_loss = losses['val']
+                    
+                    _logger.info(f"Step {i}: train loss: {train_loss:.4f}, val loss: {val_loss:.4f}")
+                    
+                    # Log metrics FIRST so they are associated with this step
+                    mlflow.log_metrics({
+                        "val_loss": val_loss, 
+                        "train_loss": train_loss
+                    }, step=i)
+
+                    # Checkpointing
+                    # We save the model if we hit the checkpoint interval.
+                    # This allows `mlflow.search_logged_models` to find it later.
+                    if i % checkpoint_interval == 0:
+                        _logger.info(f"Logging checkpoint at step {i}")
+                        
+                        # create an input signature for easier inference later
+                        signature = infer_signature(
+                            xb.cpu().numpy(), 
+                            self.model(xb, yb)[0].detach().cpu().numpy()
+                        )
+                        
+                        mlflow.pytorch.log_model(
+                            pytorch_model=self.model,
+                            artifact_path=f"checkpoint_step_{i}",
+                            signature=signature,
+                            # Input example helps with model serving later
+                            input_example=xb[:1].cpu().numpy() 
+                        )
+
+                # Optimization
+                logits, loss = self.model(xb, yb)
+                optimizer.zero_grad(set_to_none=True)
+                loss.backward()
+                optimizer.step()
 
     @torch.no_grad()
     def _estimate_loss(self):
         out = {}
         self.model.eval()
-        
-        # Re-use the loaders we created in _setup_dataloaders
-        loaders = {
-            'train': self._train_dataloader,
-            'val': self._val_dataloader
-        }
+        loaders = {'train': self._train_dataloader, 'val': self._val_dataloader}
         
         for split, loader in loaders.items():
             losses = torch.zeros(self.config.eval_iters)
@@ -127,11 +160,9 @@ class FormalizerTrainer(BaseTrainer):
                     X, Y = next(loader_iter)
                 
                 X, Y = X.to(self.config.device), Y.to(self.config.device)
-                
                 _, loss = self.model(X, Y)
                 losses[k] = loss.item()
-                
-            out[split] = losses.mean()
+            out[split] = losses.mean().item()
             
         self.model.train()
         return out
