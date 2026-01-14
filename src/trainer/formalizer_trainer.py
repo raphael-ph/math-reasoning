@@ -33,6 +33,9 @@ class FormalizerDataset(Dataset):
         return (len(self.data) - 1) // self.context_size
 
     def __getitem__(self, index):
+        # the start_idx is multiplied by the context size to ensure we do not have any overlap
+        # >>> when idx = 0 => start_idx = 0 * context = 0 --> Token window fed to model is [0 : context_size]
+        # >>> when idx = 1 => start_idx = 1 * context = context --> Token window fed to mdoel is [context_size : 2*context_size]
         start_idx = index * self.context_size
         end_idx = start_idx + self.context_size
         input_ids = self.data[start_idx : end_idx]
