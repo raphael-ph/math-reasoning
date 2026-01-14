@@ -71,76 +71,65 @@ class FormalizerTrainer(BaseTrainer):
         )
 
     def train(self):
-        self._setup_dataloaders()
-        optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.config.learning_rate)
-        train_iter = iter(self._train_dataloader)
-        
-        # Setup MLflow
-        mlflow.set_tracking_uri("file:./mlruns")
-        mlflow.set_experiment("Formalizer_Training")
-        
-        # we define how often to save the heavy model files.
-        # This prevents saving a model every time you eval.
-        checkpoint_interval = getattr(self.config, "checkpoint_interval", 1000)
-
-        _logger.info(f"Starting training on {self.config.device}...")
-
-        # Disable autologging for models so we can manually control checkpoint naming/frequency
-        mlflow.pytorch.autolog(log_models=False, silent=True)
-
-        with mlflow.start_run() as run:
-            # Log config parameters
-            mlflow.log_params(self.config.model_dump())
+            self._setup_dataloaders()
+            optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.config.learning_rate)
+            train_iter = iter(self._train_dataloader)
             
-            for i in range(self.config.max_iters):
-                # Fetch Batch
-                try:
-                    xb, yb = next(train_iter)
-                except StopIteration:
-                    train_iter = iter(self._train_dataloader)
-                    xb, yb = next(train_iter)
+            mlflow.set_tracking_uri("file:./mlruns")
+            mlflow.set_experiment("Formalizer_Training")
+            
+            checkpoint_interval = getattr(self.config, "checkpoint_interval", 1000)
 
-                xb, yb = xb.to(self.config.device), yb.to(self.config.device)
+            _logger.info(f"Starting training on {self.config.device}...")
+            mlflow.pytorch.autolog(log_models=False, silent=True)
+
+            with mlflow.start_run() as run:
+                mlflow.log_params(self.config.model_dump())
                 
-                # Evaluation & Logging Loop
-                if i % self.config.eval_interval == 0 and i > 0:
-                    losses = self._estimate_loss()
-                    train_loss = losses['train']
-                    val_loss = losses['val']
-                    
-                    _logger.info(f"Step {i}: train loss: {train_loss:.4f}, val loss: {val_loss:.4f}")
-                    
-                    # Log metrics FIRST so they are associated with this step
-                    mlflow.log_metrics({
-                        "val_loss": val_loss, 
-                        "train_loss": train_loss
-                    }, step=i)
+                for i in range(self.config.max_iters):
+                    try:
+                        xb, yb = next(train_iter)
+                    except StopIteration:
+                        train_iter = iter(self._train_dataloader)
+                        xb, yb = next(train_iter)
 
-                    # Checkpointing
-                    # We save the model if we hit the checkpoint interval.
-                    # This allows `mlflow.search_logged_models` to find it later.
-                    if i % checkpoint_interval == 0:
-                        _logger.info(f"Logging checkpoint at step {i}")
+                    xb, yb = xb.to(self.config.device), yb.to(self.config.device)
+                    
+                    # Evaluation & Logging Loop
+                    if i % self.config.eval_interval == 0 and i > 0:
+                        losses = self._estimate_loss()
                         
-                        # create an input signature for easier inference later
-                        signature = infer_signature(
-                            xb.cpu().numpy(), 
-                            self.model(xb, yb)[0].detach().cpu().numpy()
+                        # Log to Console
+                        _logger.info(
+                            f"Step {i}: "
+                            f"Train Loss: {losses['train_loss']:.4f}, Val Loss: {losses['val_loss']:.4f} | "
+                            f"Train PPL: {losses['train_ppl']:.4f}, Val PPL: {losses['val_ppl']:.4f}"
                         )
                         
-                        mlflow.pytorch.log_model(
-                            pytorch_model=self.model,
-                            artifact_path=f"checkpoint_step_{i}",
-                            signature=signature,
-                            # Input example helps with model serving later
-                            input_example=xb[:1].cpu().numpy() 
-                        )
+                        mlflow.log_metrics({
+                            "val_loss": losses['val_loss'], 
+                            "train_loss": losses['train_loss'],
+                            "val_ppl": losses['val_ppl'],
+                            "train_ppl": losses['train_ppl']
+                        }, step=i)
 
-                # Optimization
-                logits, loss = self.model(xb, yb)
-                optimizer.zero_grad(set_to_none=True)
-                loss.backward()
-                optimizer.step()
+                        if i % checkpoint_interval == 0:
+                            _logger.info(f"Logging checkpoint at step {i}")
+                            signature = infer_signature(
+                                xb.cpu().numpy(), 
+                                self.model(xb, yb)[0].detach().cpu().numpy()
+                            )
+                            mlflow.pytorch.log_model(
+                                pytorch_model=self.model,
+                                artifact_path=f"checkpoint_step_{i}",
+                                signature=signature,
+                                input_example=xb[:1].cpu().numpy() 
+                            )
+
+                    logits, loss = self.model(xb, yb)
+                    optimizer.zero_grad(set_to_none=True)
+                    loss.backward()
+                    optimizer.step()
 
     @torch.no_grad()
     def _estimate_loss(self):
@@ -162,7 +151,15 @@ class FormalizerTrainer(BaseTrainer):
                 X, Y = X.to(self.config.device), Y.to(self.config.device)
                 _, loss = self.model(X, Y)
                 losses[k] = loss.item()
-            out[split] = losses.mean().item()
+            
+            mean_loss = losses.mean()
+            
+            # Save Loss
+            out[f"{split}_loss"] = mean_loss.item()
+            # Calculate Perplexity (PPL)
+            # Perplexity is given by 2^H. Since Pytorch's implementation uses ln instead of log,
+            # it is necessary to adapt to torch.exp()
+            out[f"{split}_ppl"] = torch.exp(mean_loss).item()
             
         self.model.train()
         return out
