@@ -8,7 +8,7 @@ _logger = get_logger("hf_tokenizer", level="DEBUG")
 
 VOCAB_SIZE = 12257 
 DATASET_PATH = "data/corpus/final_training_corpus.txt"
-MODEL_SAVE_PATH = "fast_tokenizer.json"
+MODEL_SAVE_PATH = "data/vocab/fast_tokenizer.json"
 
 def train_fast_tokenizer():
     _logger.info(f"--- Starting Rust-based training (Target Vocab: {VOCAB_SIZE}) ---")
