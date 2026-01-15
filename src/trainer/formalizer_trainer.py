@@ -2,6 +2,8 @@
 # Complete implementation of the formalizer training job, with the evaluation loop,
 # checkpoints, best model, etc. This will rely havily on MLflow SDK: https://mlflow.org/docs/latest/ml/deep-learning/pytorch/
 
+import time
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -82,6 +84,10 @@ class FormalizerTrainer(BaseTrainer):
 
             _logger.info(f"Starting training on {self.config.device}...")
             mlflow.pytorch.autolog(log_models=False, silent=True)
+            
+            # --- TIMER START ---
+            # We start the clock just before the loop begins
+            start_time = time.time() 
 
             with mlflow.start_run() as run:
                 mlflow.log_params(self.config.model_dump())
@@ -99,11 +105,24 @@ class FormalizerTrainer(BaseTrainer):
                     if i % self.config.eval_interval == 0 and i > 0:
                         losses = self._estimate_loss()
                         
-                        # Log to Console
+                        # --- ETA CALCULATION ---
+                        current_time = time.time()
+                        elapsed_seconds = current_time - start_time
+                        # Avoid division by zero
+                        avg_time_per_step = elapsed_seconds / i 
+                        remaining_steps = self.config.max_iters - i
+                        eta_seconds = remaining_steps * avg_time_per_step
+                        
+                        # Formatting nicely as HH:MM:SS
+                        eta_str = str(datetime.timedelta(seconds=int(eta_seconds)))
+                        elapsed_str = str(datetime.timedelta(seconds=int(elapsed_seconds)))
+                        
+                        # Log to Console with ETA
                         _logger.info(
-                            f"Step {i}: "
-                            f"Train Loss: {losses['train_loss']:.4f}, Val Loss: {losses['val_loss']:.4f} | "
-                            f"Train PPL: {losses['train_ppl']:.4f}, Val PPL: {losses['val_ppl']:.4f}"
+                            f"Step {i}/{self.config.max_iters} | "
+                            f"Loss: {losses['train_loss']:.4f} | "
+                            f"Val PPL: {losses['val_ppl']:.2f} | "
+                            f"Elapsed: {elapsed_str} | ETA: {eta_str}"
                         )
                         
                         mlflow.log_metrics({
@@ -114,7 +133,7 @@ class FormalizerTrainer(BaseTrainer):
                         }, step=i)
 
                         if i % checkpoint_interval == 0:
-                            _logger.info(f"Logging checkpoint at step {i}")
+                            _logger.info(f"Saving checkpoint at step {i}")
                             signature = infer_signature(
                                 xb.cpu().numpy(), 
                                 self.model(xb, yb)[0].detach().cpu().numpy()
