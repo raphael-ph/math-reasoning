@@ -36,7 +36,7 @@ if not os.path.exists(full_ssh_path):
     _logger.error(f"SSH Key not found at: {full_ssh_path}")
     raise FileNotFoundError(f"No SSH key at {full_ssh_path}")
 
-def train_tokenizer_remote():
+def train_formalizer_remote():
     """
     Orchestrates the remote training job:
     1. Rents GPU -> 2. Syncs Code/Data -> 3. Runs Job -> 4. Downloads Model -> 5. Destroys Instance
@@ -52,7 +52,7 @@ def train_tokenizer_remote():
                                                disk=20, # GB
                                                gpu_name='RTX_5090',
                                                num_gpus='1',
-                                               label="tokenizer_training",
+                                               label="formalizer_training",
                                                )
         instance_id = instance['new_contract']
         
@@ -87,7 +87,8 @@ def train_tokenizer_remote():
             "--exclude=bin/",
             "--exclude=lib/",
             "--exclude=include/",
-            "--exclude=data/vocab/*" # Don't upload old results if they exist locally
+            "--exclude=data/raw/*",      # Don't upload old results if they exist locally
+            "--exclude=notebooks/",      # Don't upload old results if they exist locally
         ]
 
         rsync_cmd = [
@@ -108,7 +109,7 @@ def train_tokenizer_remote():
             "cd /workspace && "
             "python3 -m venv .venv && source .venv/bin/activate &&" # creating a venv is the easiest way that I thought fast to manage dependencies mismatch
             "pip3 install -r requirements.txt &&"
-            "python3 remote_entrypoint.py"
+            "python3 remote_formalizer_training_job.py"
         )
         
         ssh_cmd = [
@@ -132,4 +133,4 @@ def train_tokenizer_remote():
             _logger.info(f"Instance {instance_id} destroyed!")
 
 if __name__ == "__main__":
-    train_tokenizer_remote()
+    train_formalizer_remote()
