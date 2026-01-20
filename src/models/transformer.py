@@ -82,7 +82,7 @@ class MultiHeadAttention(nn.Module):
         The idea is to run the attention mechanism on the input in parallel. With this implementation,
         the net will learn different aspects of the input in each layer. As the authors state:
 
-        >>> "Multi-head attention allows the model to jointly attend to information from different representation \ 
+        >>> "Multi-head attention allows the model to jointly attend to information from different representation
         >>> subspaces at different positions. With a single attention head, averaging inhibits this."
         """
         out = torch.cat([h(x) for h in self.heads], dim=-1) # concatenate on the last dim, Channels

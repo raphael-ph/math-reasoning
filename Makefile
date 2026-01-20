@@ -1,3 +1,4 @@
 train:
-	uv export --no-hashes --no-dev --format requirements.txt > requirements.txt
+	echo "Generating updated requirements.txt"
+	uv pip compile pyproject.toml -o requirements.txt
 	python3 -m src.utils.runner

@@ -106,10 +106,14 @@ def train_formalizer_remote():
         # --- EXECUTE COMMANDS (Direct SSH) ---
         _logger.info("Starting remote execution...")
         remote_script = (
-            "cd /workspace && "
-            "python3 -m venv .venv && source .venv/bin/activate &&" # creating a venv is the easiest way that I thought fast to manage dependencies mismatch
-            "pip3 install -r requirements.txt &&"
-            "python3 remote_formalizer_training_job.py"
+                "cd /workspace && "
+                "curl -LsSf https://astral.sh/uv/install.sh | sh && "  # Install uv
+                "source $HOME/.local/bin/env && "                      
+                "uv venv .venv && "                                    # Create isolated env
+                "source .venv/bin/activate && "                        # Activate env
+                "uv pip install . && "                                 # Install dependencies
+                "export PYTHONPATH=$PYTHONPATH:. && " 
+                "python3 remote_formalizer_training_job.py"
         )
         
         ssh_cmd = [
