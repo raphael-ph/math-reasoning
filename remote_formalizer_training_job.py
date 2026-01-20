@@ -68,7 +68,6 @@ training_config_dict = {
     # Optimization
     "batch_size": 64,             
     "learning_rate": 1e-3,         # Smaller models can handle higher Learning Rates (1e-3 is standard for Nano)
-    "dropout": 0.2,                # Standard dropout is fine here.
     
     # Model Architecture: "Nano"
     # ~33M Parameters
@@ -96,7 +95,6 @@ formalizer_model = Transformer(
     context_size=config.context_size,
     n_layers=config.n_layer,
     n_heads=config.n_heads,
-    dropout=config.dropout
 )
 
 # --- Start Training ---

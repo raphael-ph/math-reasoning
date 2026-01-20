@@ -30,7 +30,6 @@ class BaseTrainerConfig(BaseModel):
     n_embeddings: int = Field(..., description="Embedding size")
     n_heads: int = Field(..., description="Number of attention heads")
     n_layer: int = Field(..., description="Number of layers")
-    dropout: float = Field(..., description="Amount of dropout on the net")
     learning_rate: float = Field(..., description="Optimizer learning rate")
 
     # hardware
