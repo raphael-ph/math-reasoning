@@ -30,7 +30,8 @@ class FormalizerDataset(Dataset):
             text = f.read()
     
         _logger.info("Tokenizing corpus...")
-        self.data = tokenizer.encode(text, return_tensors="pt").squeeze()
+        encoded = tokenizer.encode(text)
+        self.data = torch.tensor(encoded.ids, dtype=torch.long)
         _logger.info(f"Tokenization complete. Total tokens: {len(self.data)}")
 
     def __len__(self):
