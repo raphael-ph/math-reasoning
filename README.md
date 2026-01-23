@@ -1,2 +1,2 @@
 # math-reasoning
-My master's thesis
+My master's thesis.
