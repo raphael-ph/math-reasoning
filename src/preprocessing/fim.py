@@ -92,5 +92,5 @@ if __name__ == "__main__":
     print("--- ORIGINAL DOC ---")
     print(code_doc)
     print("--- FIM DOC ---")
-    print(line_level_fim(code_doc))
+    print(apply_line_level_fim(code_doc))
     
