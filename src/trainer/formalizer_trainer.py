@@ -12,8 +12,10 @@ import mlflow
 from mlflow.models import infer_signature
 
 # internal methods
-from .base import BaseTrainer, BaseTrainerConfig
+from .base import BaseTrainer
 from ..utils.logger import get_logger
+from ..preprocessing.hf_tokenizer import Tokenizer
+from ..preprocessing.fim import apply_line_level_fim
 
 # torch imports
 import torch
@@ -23,33 +25,37 @@ from torch.utils.data import Dataset, DataLoader
 _logger = get_logger("formalizer_training", level="DEBUG")
 
 class FormalizerDataset(Dataset):
-    def __init__(self, corpus_path: Path, tokenizer, context_size: int):
+    def __init__(self, corpus_path: Path, tokenizer: Tokenizer, context_size: int):
         super().__init__()
         self.context_size = context_size
+        self.tokenizer = tokenizer
         with open(corpus_path, "r", encoding="utf-8") as f:
-            text = f.read()
-    
-        _logger.info("Tokenizing corpus...")
-        encoded = tokenizer.encode(text)
-        self.data = torch.tensor(encoded.ids, dtype=torch.long)
-        _logger.info(f"Tokenization complete. Total tokens: {len(self.data)}")
+            raw_content = f.read()
+
+        # We simply load the samples in the initialization of the Dataset. All the tokenization and 
+        # FIM strategy application will be done in the __getitem__ method, on the fly. Specially for the FIM strategy
+        # this is good because we ensure the model sees different configurations of PSM during training.
+        self.samples = raw_content.split("<|endoftext|>") # use the special EOT token to split each sample from the corpus
+        self.samples = [s.strip() for s in self.samples if s.strip()] # filter empty strings
+
+        _logger.info(f"Loaded {len(self.samples)} documents.")
 
     def __len__(self):
-        return (len(self.data) - 1) // self.context_size
+        return len(self.samples)
 
     def __getitem__(self, index):
-        start_idx = index * self.context_size
-        end_idx = start_idx + self.context_size
+        # Get the raw text for this specific document
+        text = self.samples[index]
         
-        if end_idx + 1 > len(self.data):
-             start_idx = len(self.data) - self.context_size - 1
-             end_idx = start_idx + self.context_size
-
-        input_ids = self.data[start_idx : end_idx]
-        target_ids = self.data[start_idx + 1 : end_idx + 1]
+        # Apply Dynamic FIM
+        fim_text = apply_line_level_fim(text)
+        encodings = self.tokenizer.encode(fim_text)
+        full_tensor = torch.tensor(encodings.ids, dtype=torch.long)
+        input_ids = full_tensor[:-1]  # 0 to N-1
+        target_ids = full_tensor[1:]  # 1 to N
         
         return input_ids, target_ids
-
+    
 class FormalizerTrainer(BaseTrainer):
     _train_dataloader: Optional[DataLoader] = None
     _val_dataloader: Optional[DataLoader] = None
