@@ -17,8 +17,8 @@ GPT4_SPLIT_PAT = r"""'(?i:[sdmt]|ll|ve|re)|[^\r\n\p{L}\p{N}]?+\p{L}+|\p{N}{1,3}|
 SPECIAL_TOKENS = {
     "<|endoftext|>": 12256, # token marking the End of a File (similar to OpenAI)
     "<|fim_prefix|>": 12257,
-    "<|fim_suffix|>": 12258,
-    "<|fim_middle|>": 12259,
+    "<|fim_middle|>": 12258,
+    "<|fim_suffix|>": 12259,
 }
 _logger = get_logger(__name__, level="DEBUG")
 
