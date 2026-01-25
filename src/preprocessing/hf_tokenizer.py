@@ -6,7 +6,7 @@ from ..utils.logger import get_logger
 
 _logger = get_logger("hf_tokenizer", level="DEBUG")
 
-VOCAB_SIZE = 12260
+VOCAB_SIZE = 12261
 DATASET_PATH = "data/corpus/final_training_corpus.txt"
 MODEL_SAVE_PATH = "data/vocab/fast_tokenizer.json"
 
@@ -32,7 +32,7 @@ def train_fast_tokenizer():
     # The library handles the merge math in Rust (C++ speed).
     trainer = trainers.BpeTrainer(
         vocab_size=VOCAB_SIZE,
-        special_tokens=["<|endoftext|>", "<|fim_prefix|>", "<|fim_middle|>", "<|fim_suffix|>"], 
+        special_tokens=["<|endoftext|>", "<|fim_prefix|>", "<|fim_middle|>", "<|fim_suffix|>", "<|pad|>"], 
         show_progress=True
     )
 
