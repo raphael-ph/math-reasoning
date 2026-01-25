@@ -47,6 +47,11 @@ partition_dataset(DATASET_PATH, TRAIN_PATH, VAL_PATH, split_ratio=0.90)
 # --- Load Tokenizer ---
 logger.info(f"Loading tokenizer from {TOKENIZER_PATH}...")
 tokenizer = HFTokenizer.from_file(TOKENIZER_PATH)
+pad_id = tokenizer.token_to_id("<|pad|>")
+tokenizer.enable_padding(
+        pad_id=pad_id,
+        pad_token="<|pad|>",
+)
 vocab_size = tokenizer.get_vocab_size() 
 logger.info(f"Tokenizer loaded. Vocab size: {vocab_size}")
 
