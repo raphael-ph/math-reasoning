@@ -3,7 +3,7 @@
 # checkpoints, best model, etc. This will rely havily on MLflow SDK: https://mlflow.org/docs/latest/ml/deep-learning/pytorch/
 
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -49,7 +49,12 @@ class FormalizerDataset(Dataset):
         
         # Apply Dynamic FIM
         fim_text = apply_line_level_fim(text)
-        encodings = self.tokenizer.encode(fim_text)
+        encodings = self.tokenizer.encode(
+            fim_text, 
+            max_length=self.context_size + 1, 
+            truncation=True, 
+            padding="max_length"
+        )
         full_tensor = torch.tensor(encodings.ids, dtype=torch.long)
         input_ids = full_tensor[:-1]  # 0 to N-1
         target_ids = full_tensor[1:]  # 1 to N
@@ -121,8 +126,8 @@ class FormalizerTrainer(BaseTrainer):
                         eta_seconds = remaining_steps * avg_time_per_step
                         
                         # Formatting nicely as HH:MM:SS
-                        eta_str = str(datetime.timedelta(seconds=int(eta_seconds)))
-                        elapsed_str = str(datetime.timedelta(seconds=int(elapsed_seconds)))
+                        eta_str = str(timedelta(seconds=int(eta_seconds)))
+                        elapsed_str = str(timedelta(seconds=int(elapsed_seconds)))
                         
                         # Log to Console with ETA
                         _logger.info(
@@ -139,18 +144,18 @@ class FormalizerTrainer(BaseTrainer):
                             "train_ppl": losses['train_ppl']
                         }, step=i)
 
-                        if i % checkpoint_interval == 0:
-                            _logger.info(f"Saving checkpoint at step {i}")
-                            signature = infer_signature(
-                                xb.cpu().numpy(), 
-                                self.model(xb, yb)[0].detach().cpu().numpy()
-                            )
-                            mlflow.pytorch.log_model(
-                                pytorch_model=self.model,
-                                artifact_path=f"checkpoint_step_{i}",
-                                signature=signature,
-                                input_example=xb[:1].cpu().numpy() 
-                            )
+                    if i > 0 and i % checkpoint_interval == 0:
+                        _logger.info(f"Saving checkpoint at step {i}")
+                        signature = infer_signature(
+                            xb.cpu().numpy(), 
+                            self.model(xb, yb)[0].detach().cpu().numpy()
+                        )
+                        mlflow.pytorch.log_model(
+                            pytorch_model=self.model,
+                            artifact_path=f"checkpoint_step_{i}",
+                            signature=signature,
+                            input_example=xb[:1].cpu().numpy() 
+                        )
 
                     logits, loss = self.model(xb, yb)
                     optimizer.zero_grad(set_to_none=True)

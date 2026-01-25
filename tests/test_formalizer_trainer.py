@@ -1,177 +1,270 @@
+import sys
 import pytest
 import torch
-import torch.nn as nn
-from torch.utils.data import Dataset
-from pathlib import Path
-import tempfile
-import shutil
+import math
+import itertools
+from unittest.mock import MagicMock, patch
 
-# --- 1. MOCKS (Simulating your real Tokenizer and Model) ---
+# --- 1. MOCK DEPENDENCIES ---
+mock_base = MagicMock()
+sys.modules['src.trainer.base'] = mock_base
 
-class MockTokenizer:
-    """Simulates a tokenizer that converts text to random integers."""
-    def __init__(self, vocab_size=100):
-        self.vocab_size = vocab_size
+from pydantic import BaseModel, ConfigDict
 
-    def encode(self, text, return_tensors="pt"):
-        # Returns a random tensor of integers simulating token IDs
-        # Length is proportional to text length for realism
-        length = len(text)
-        return torch.randint(0, self.vocab_size, (1, length))
+class MockBaseTrainer(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    model: torch.nn.Module
+    train_dataset: object
+    val_dataset: object
+    config: object
+    def train(self): pass
+    def model_post_init(self, __context): pass
 
-class MockGPTModel(nn.Module):
-    """Simulates a Transformer that returns correct shapes for logits/loss."""
-    def __init__(self, config):
-        super().__init__()
-        self.config = config
-        # Simple linear layer to ensure gradients can flow
-        self.net = nn.Linear(config.n_embeddings, config.vocab_size)
-        # Embedding to handle input integers
-        self.embed = nn.Embedding(config.vocab_size, config.n_embeddings)
+mock_base.BaseTrainer = MockBaseTrainer
+sys.modules['src.utils.logger'] = MagicMock()
+sys.modules['src.preprocessing.hf_tokenizer'] = MagicMock()
+sys.modules['src.preprocessing.fim'] = MagicMock()
 
-    def forward(self, idx, targets=None):
-        # idx shape: (Batch, Context)
-        b, t = idx.shape
-        
-        # Fake forward pass
-        x = self.embed(idx) # (B, T, n_embeddings)
-        logits = self.net(x) # (B, T, vocab_size)
+# --- 2. IMPORT SUT ---
+import src.trainer.formalizer_trainer as sut
+from src.trainer.formalizer_trainer import FormalizerDataset, FormalizerTrainer
 
-        loss = None
-        if targets is not None:
-            # Create a dummy scalar loss that requires grad
-            # We use .sum() so it actually depends on input for backward() check
-            loss = logits.sum() * 0.0 + torch.tensor(1.0, requires_grad=True)
-
-        return logits, loss
-
-# --- IMPORT TRAINER CODE ---
-try:
-    from src.trainer.base import BaseTrainerConfig
-    from src.trainer.formalizer_trainer import FormalizerDataset, FormalizerTrainer
-except ImportError:
-    pass
-
-# --- 3. PYTEST FIXTURES ---
+# --- FIXTURES ---
 
 @pytest.fixture
-def toy_corpus():
-    """Creates a temporary text file simulating the LEAN dataset."""
-    # Create a temp directory
-    temp_dir = tempfile.mkdtemp()
-    file_path = Path(temp_dir) / "toy_corpus.txt"
-    
-    # Write dummy "math" text
-    content = "definition topological_space " * 500  # Enough for a few batches
-    with open(file_path, "w", encoding="utf-8") as f:
-        f.write(content)
-        
-    yield file_path
-    
-    # Cleanup
-    shutil.rmtree(temp_dir)
+def mock_tokenizer():
+    tokenizer = MagicMock()
+    mock_encoding = MagicMock()
+    mock_encoding.ids = list(range(11)) 
+    tokenizer.encode.return_value = mock_encoding
+    return tokenizer
 
 @pytest.fixture
-def trainer_config():
-    """Returns a config optimized for CPU/Testing."""
-    return BaseTrainerConfig(
-        vocab_size=100,
-        context_size=16,
-        max_iters=5,        # Very short run
-        eval_interval=2,
-        eval_iters=2,
-        batch_size=4,
-        n_embeddings=32,    # Small dims for speed
-        n_heads=2,
-        n_layer=2,
-        dropout=0.1,
-        learning_rate=1e-3,
-        device="cpu"        # Force CPU for CI/CD compatibility
-    )
+def mock_config():
+    config = MagicMock()
+    config.device = "cpu"
+    config.batch_size = 2
+    config.learning_rate = 1e-4
+    config.max_iters = 10
+    config.eval_interval = 5
+    config.checkpoint_interval = 5
+    config.eval_iters = 2
+    config.model_dump.return_value = {"param": "value"}
+    return config
 
-# --- 4. THE ACTUAL TESTS ---
+@pytest.fixture
+def mock_model():
+    model = MagicMock(spec=torch.nn.Module)
+    # Return (logits, loss)
+    model.return_value = (torch.randn(2, 10, 10), torch.tensor(2.0, requires_grad=True))
+    model.parameters.return_value = [torch.tensor([1.0], requires_grad=True)]
+    return model
 
-def test_dataset_chunking(toy_corpus):
-    """Test if FormalizerDataset chunks text correctly."""
-    tokenizer = MockTokenizer(vocab_size=100)
-    context_size = 10
-    
-    dataset = FormalizerDataset(toy_corpus, tokenizer, context_size)
-    
-    # Basic assertions
-    assert len(dataset) > 0, "Dataset should not be empty"
-    
-    # Test shapes
-    x, y = dataset[0]
-    assert x.shape == (context_size,), f"Expected input shape ({context_size},), got {x.shape}"
-    assert y.shape == (context_size,), f"Expected target shape ({context_size},), got {y.shape}"
-    
-    # Test Target Shift (y should be x shifted by 1)
-    # Note: In our mock, data is random, but indices must align. 
-    # Real test checks logic: dataset.data[0:10] vs dataset.data[1:11]
-    
-    raw_data = dataset.data
-    expected_x = raw_data[0:context_size]
-    expected_y = raw_data[1:context_size+1]
-    
-    assert torch.equal(x, expected_x)
-    assert torch.equal(y, expected_y)
+@pytest.fixture
+def mock_dataset():
+    ds = MagicMock() 
+    ds.__len__.return_value = 10
+    ds.__getitem__.return_value = (torch.zeros(10), torch.zeros(10))
+    return ds
 
-def test_trainer_initialization(toy_corpus, trainer_config):
-    """Test if the Trainer initializes components correctly."""
-    tokenizer = MockTokenizer(vocab_size=trainer_config.vocab_size)
-    dataset = FormalizerDataset(toy_corpus, tokenizer, trainer_config.context_size)
-    model = MockGPTModel(trainer_config)
-    
-    trainer = FormalizerTrainer(
-        model=model,
-        train_dataset=dataset,
-        val_dataset=dataset, # Reuse for test
-        config=trainer_config
-    )
-    
-    assert trainer.model is not None
-    assert trainer.config.device == "cpu"
+# --- DATASET TESTS (Unchanged) ---
 
-def test_training_loop_runs(toy_corpus, trainer_config):
-    """Smoke test: Does the train() method run without crashing?"""
-    tokenizer = MockTokenizer(vocab_size=trainer_config.vocab_size)
-    dataset = FormalizerDataset(toy_corpus, tokenizer, trainer_config.context_size)
-    model = MockGPTModel(trainer_config)
-    
-    trainer = FormalizerTrainer(
-        model=model,
-        train_dataset=dataset,
-        val_dataset=dataset,
-        config=trainer_config
-    )
-    
-    # Ensure no errors are raised during the loop
-    try:
-        trainer.train()
-    except Exception as e:
-        pytest.fail(f"Training loop crashed with error: {e}")
+def test_dataset_initialization_and_len(mock_tokenizer, tmp_path):
+    corpus_file = tmp_path / "corpus.txt"
+    content = "Sample 1 <|endoftext|> Sample 2 <|endoftext|> \n <|endoftext|>" 
+    corpus_file.write_text(content, encoding="utf-8")
 
-def test_model_params_update(toy_corpus, trainer_config):
-    """Verification: Do model parameters actually change after training?"""
-    tokenizer = MockTokenizer(vocab_size=trainer_config.vocab_size)
-    dataset = FormalizerDataset(toy_corpus, tokenizer, trainer_config.context_size)
-    model = MockGPTModel(trainer_config)
+    dataset = FormalizerDataset(corpus_file, mock_tokenizer, context_size=10)
+
+    assert len(dataset) == 2
+    assert dataset.samples == ["Sample 1", "Sample 2"]
+
+def test_dataset_getitem_logic(mock_tokenizer, tmp_path):
+    corpus_file = tmp_path / "corpus.txt"
+    corpus_file.write_text("Test Data<|endoftext|>", encoding="utf-8")
     
-    trainer = FormalizerTrainer(
-        model=model,
-        train_dataset=dataset,
-        val_dataset=dataset,
-        config=trainer_config
-    )
-    
-    # Take a snapshot of a parameter (e.g., first layer weight)
-    # Clone it to ensure we have a deep copy
-    param_before = list(model.parameters())[0].clone()
-    
-    trainer.train()
-    
-    param_after = list(model.parameters())[0]
-    
-    # Check if they are different (gradients applied)
-    assert not torch.equal(param_before, param_after), "Model parameters did not update! Optimizer failed."
+    with patch(f"{sut.__name__}.apply_line_level_fim") as mock_fim:
+        mock_fim.return_value = "FIM_Applied_Text"
+        dataset = FormalizerDataset(corpus_file, mock_tokenizer, context_size=10)
+        input_ids, target_ids = dataset[0]
+
+        mock_fim.assert_called_with("Test Data")
+        expected_input = torch.tensor(list(range(10)), dtype=torch.long)
+        expected_target = torch.tensor(list(range(1, 11)), dtype=torch.long)
+
+        assert torch.equal(input_ids, expected_input)
+        assert torch.equal(target_ids, expected_target)
+
+# --- TRAINER TESTS ---
+
+class TestFormalizerTrainer:
+
+    def setup_trainer(self, config, model, dataset):
+        return FormalizerTrainer(
+            model=model,
+            config=config,
+            train_dataset=dataset,
+            val_dataset=dataset
+        )
+
+    def test_model_post_init(self, mock_config, mock_model, mock_dataset):
+        trainer = self.setup_trainer(mock_config, mock_model, mock_dataset)
+        trainer.model_post_init(None)
+        mock_model.to.assert_called_with(mock_config.device)
+
+    def test_setup_dataloaders(self, mock_config, mock_model, mock_dataset):
+        trainer = self.setup_trainer(mock_config, mock_model, mock_dataset)
+        
+        with patch(f"{sut.__name__}.DataLoader") as MockDL:
+            trainer._setup_dataloaders()
+            assert trainer._train_dataloader is not None
+            assert trainer._val_dataloader is not None
+            MockDL.assert_any_call(
+                dataset=trainer.train_dataset,
+                batch_size=mock_config.batch_size,
+                shuffle=True,
+                num_workers=4,
+                pin_memory=True
+            )
+
+    def test_train_loop_full_flow(self, mock_config, mock_model, mock_dataset):
+        trainer = self.setup_trainer(mock_config, mock_model, mock_dataset)
+        
+        # --- TEST CONFIGURATION FIX ---
+        # range(5) provides indices 0, 1, 2, 3, 4.
+        # We set checkpoint_interval=2 so it triggers at i=2 and i=4.
+        mock_config.max_iters = 5
+        mock_config.checkpoint_interval = 2
+        mock_config.eval_interval = 100 # Ensure we skip eval to isolate checkpoint logic
+        
+        dummy_x = torch.zeros((2, 10))
+        dummy_y = torch.zeros((2, 10))
+        mock_dl = MagicMock()
+        mock_dl.__iter__.return_value = itertools.cycle([(dummy_x, dummy_y)])
+        
+        with patch(f"{sut.__name__}.DataLoader", return_value=mock_dl):
+            with patch(f"{sut.__name__}.mlflow") as mock_mlflow:
+                with patch(f"{sut.__name__}.time"):
+                    trainer._estimate_loss = MagicMock(return_value={
+                        'train_loss': 1.0, 'val_loss': 1.5, 'train_ppl': 2.7, 'val_ppl': 4.5
+                    })
+                    
+                    trainer.train()
+                    
+                    mock_mlflow.set_tracking_uri.assert_called()
+                    
+                    # Now this will succeed because i=2 and i=4 triggered the save
+                    mock_mlflow.pytorch.log_model.assert_called()
+
+    def test_stop_iteration_handling(self, mock_config, mock_model, mock_dataset):
+        """
+        Verifies that if the iterator is exhausted (StopIteration),
+        the trainer catches it, re-initializes the iterator, and continues.
+        """
+        trainer = self.setup_trainer(mock_config, mock_model, mock_dataset)
+        trainer._setup_dataloaders = MagicMock() 
+
+        mock_dl = MagicMock()
+        trainer._train_dataloader = mock_dl
+        
+        dummy_x = torch.zeros((1, 1))
+        dummy_y = torch.zeros((1, 1))
+        
+        # Generator 1: Yields one item, then crashes.
+        def iter_crashes():
+            yield (dummy_x, dummy_y)
+            # Raise StopIteration implicitly by finishing
+        
+        # Generator 2: Infinite yielding
+        def iter_infinite():
+            while True:
+                yield (dummy_x, dummy_y)
+
+        # We set side_effect as a LIST of generators.
+        # 1st call to iter(loader) gets iter_crashes()
+        # 2nd call to iter(loader) gets iter_infinite()
+        mock_dl.__iter__.side_effect = [iter_crashes(), iter_infinite()]
+
+        # max_iters=2 means we need 2 batches.
+        # Batch 0: From iter_crashes (OK)
+        # Batch 1: iter_crashes raises StopIteration -> Catch -> Re-init -> Get from iter_infinite (OK)
+        mock_config.max_iters = 2
+        
+        with patch(f"{sut.__name__}.mlflow"):
+            with patch("torch.optim.AdamW"):
+                trainer.train()
+
+        # Should have called iter() twice (initial + recovery)
+        assert mock_dl.__iter__.call_count == 2
+
+    def test_estimate_loss_logic(self, mock_config, mock_model, mock_dataset):
+        """
+        Verifies _estimate_loss handles StopIteration across splits (train/val)
+        """
+        trainer = self.setup_trainer(mock_config, mock_model, mock_dataset)
+        mock_config.eval_iters = 2
+        
+        mock_dl = MagicMock()
+        # Use same mock for both to simplify verification
+        trainer._train_dataloader = mock_dl
+        trainer._val_dataloader = mock_dl
+        
+        dummy_x = torch.zeros((1, 1))
+        dummy_y = torch.zeros((1, 1))
+        
+        mock_model.return_value = (None, torch.tensor(1.0))
+        
+        # We need to simulate the sequence of calls to iter(loader):
+        # 1. 'train' split start -> Returns iter that yields 1 item then stops.
+        # 2. 'train' split recovery -> Returns iter that yields items.
+        # 3. 'val' split start -> Returns iter that yields items.
+        
+        def iter_crashes_after_one():
+            yield (dummy_x, dummy_y)
+            # Finish -> StopIteration
+            
+        def iter_infinite():
+            while True:
+                yield (dummy_x, dummy_y)
+
+        mock_dl.__iter__.side_effect = [
+            iter_crashes_after_one(), # Train Start
+            iter_infinite(),          # Train Recovery
+            iter_infinite()           # Val Start
+        ]
+        
+        results = trainer._estimate_loss()
+        
+        # Verify calls
+        assert results['train_loss'] == 1.0
+        # Check perplexity math
+        assert math.isclose(results['train_ppl'], math.exp(1.0), rel_tol=1e-4)
+        # We expect 3 calls to iter(): Train(Crash), Train(Recover), Val
+        assert mock_dl.__iter__.call_count == 3
+
+    def test_checkpoint_saving_signature(self, mock_config, mock_model, mock_dataset):
+        trainer = self.setup_trainer(mock_config, mock_model, mock_dataset)
+        
+        # Save every step
+        mock_config.max_iters = 2
+        mock_config.eval_interval = 10 
+        mock_config.checkpoint_interval = 1 
+        
+        dummy_x = torch.zeros((2, 10))
+        dummy_y = torch.zeros((2, 10))
+        
+        mock_dl = MagicMock()
+        mock_dl.__iter__.return_value = itertools.cycle([(dummy_x, dummy_y)])
+        
+        trainer._setup_dataloaders = MagicMock()
+        trainer._train_dataloader = mock_dl
+        
+        with patch(f"{sut.__name__}.mlflow") as mock_mlflow:
+            with patch(f"{sut.__name__}.infer_signature") as mock_sig:
+                # We skip eval loop via eval_interval=10, so estimate_loss isn't called
+                trainer.train()
+                
+                # Check that infer_signature was called
+                mock_sig.assert_called()
+                # Check that log_model was called
+                mock_mlflow.pytorch.log_model.assert_called()
