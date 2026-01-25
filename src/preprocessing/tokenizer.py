@@ -11,11 +11,14 @@ from collections import defaultdict
 from ..utils.logger import get_logger
 
 # globals
-VOCAB_SIZE = 12257 # GPT-2 vocab size for 10B tokens of trainig was 50000
+VOCAB_SIZE = 12260 # GPT-2 vocab size for 10B tokens of trainig was 50000
 NUM_MERGES = VOCAB_SIZE - 256
 GPT4_SPLIT_PAT = r"""'(?i:[sdmt]|ll|ve|re)|[^\r\n\p{L}\p{N}]?+\p{L}+|\p{N}{1,3}| ?[^\s\p{L}\p{N}]++[\r\n]*|\s*[\r\n]|\s+(?!\S)|\s+"""
 SPECIAL_TOKENS = {
     "<|endoftext|>": 12256, # token marking the End of a File (similar to OpenAI)
+    "<|fim_prefix|>": 12257,
+    "<|fim_suffix|>": 12258,
+    "<|fim_middle|>": 12259,
 }
 _logger = get_logger(__name__, level="DEBUG")
 
