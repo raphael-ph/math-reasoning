@@ -14,7 +14,7 @@ SPECIAL_CHARACTERS = {
     "end": "<|endoftext|>",
 }
 
-def line_level_fim(document: str, 
+def apply_line_level_fim(document: str, 
                         rate: float = 0.9, 
                         strategy: Literal["psm", "spm"] = "psm") -> str:
     """Implements Fill in the Middle (FIM) strategy on a LINE level.
