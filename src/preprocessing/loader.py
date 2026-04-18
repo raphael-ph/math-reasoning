@@ -66,7 +66,7 @@ class RepoLoader:
             _logger.info(f"Error during git clone: {e.stderr}")
             return False
 
-    def _get_lean_files(self) -> List[Path]:
+    def _get_files(self) -> List[Path]:
         """Recursively finds all files with the specified extension."""
         if not self.start_path.exists():
             _logger.info(f"Error: The main code directory '{self.start_path}' was not found.")

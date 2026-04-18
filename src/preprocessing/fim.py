@@ -21,7 +21,7 @@ def apply_line_level_fim(document: str,
     
     This is a little twist on the original implementation since most of the data
     for the formalizer in my implementation will be code, line works better since we 
-    preserve the structure of the input itself
+    preserve the structure of the input itself.
 
     Args:
         document (str): Source text
