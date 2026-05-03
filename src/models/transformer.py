@@ -192,10 +192,14 @@ class Transformer(nn.Module):
     # based on it's relative position. As the authors propose, when compared to the original implementation 
     # in "Attention is All you Need" paper, we move from the additive implementation to a multiplicative one. 
     # This ensures that the norm of the embedding remains the same, and position is encoded through rotation.
-    def rope(self, idx, theta: int=10000):
+    def precompute_freqs_cis(self, idx, theta: int=10000):
         """Implements the Rotary Position Embedding (RoPE)
         For this specific implementation of RoPE, I followed the instructions 
         presented in this video: http://youtube.com/watch?v=V8r__fXx7tU
+
+        There is actually a twist in this implementation when compared to the video: Hugging Face transformers
+        has a different perspective on calculating RoPE. It precomputes the Rotation Matrix during initialization
+        and apply it on the forward pass.
         
         Args:
             idx: input tokens (B, T)
@@ -218,17 +222,36 @@ class Transformer(nn.Module):
         # - w_k is the angular frequency
         # - d is the head_size
         # - k is the index of the pair we are selecting, where k in [0, d/2-1]
-        ang_freq = 1 / (theta**(torch.arange(0, self.head_size, 2, dtype=torch.float32, device=DEVICE) / self.head_size)) # (d/2)
+        freqs = 1 / (theta**(torch.arange(0, self.head_size, 2, dtype=torch.float32, device=DEVICE) / self.head_size)) # (d/2)
 
         # calculating the actual rotation for each position. Equivalent to m x \theta
-        B, T = idx.shape
-        pos = torch.arange(0, T, device=DEVICE) # (T)
-        out = torch.outer(pos, ang_freq) # (T, d/2)
+        _, T = idx.shape
+        t = torch.arange(0, T, device=DEVICE)                   # (T)
+        freqs = torch.outer(t, freqs)                           # (T, d/2) 
+        freqs_cis = torch.repeat_interleave(freqs, 2, dim=-1)   # (T, d)
 
         # defining the rotation matrix
-        cos, sin = torch.cos(out), torch.sin(out)
-        out = torch.stack([cos, -sin, sin, cos], dim=-1) # (T, d/2, 4)
-        out = rearrange(out, "t d_half (i j) -> t d_half i j", i=2, j=2) # (T, d/2, 2, 2)
+        cos = torch.cos(freqs_cis)  # (T, d)
+        sin = torch.sin(freqs_cis)  # (T, d)
 
-        return out.float()
+        return cos, sin
+     
+    def rotate_half(self, x):
+        """Implementing the computational efficient realization of rotary matrix multiplication
 
+        This shows on original paper (https://arxiv.org/pdf/2104.09864), section 3.4.2
+        """
+        x1 = x[..., 0::2] # Even Indices          (B, T, C/2)
+        x2 = x[..., 1::2] # Odd indices           (B, T, C/2)
+        out = torch.stack([-x2, x1], dim=-1)    # (B, T, C/2, 2)
+
+        return out.flatten(-2)                  # (B, T, C)
+
+    def rope(self, q, k, cos, sin):
+        """Apply rope to Query and Key values"""
+        cos = cos.unsqueeze(0)
+        sin = sin.unsqueeze(0)
+        q_emb = (q * cos) + (self.rotate_half(q) * sin)
+        k_emb = (k * cos) + (self.rotate_half(k) * sin)
+
+        return q_emb, k_emb
