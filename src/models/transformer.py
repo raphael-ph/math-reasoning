@@ -8,6 +8,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from einops import rearrange
 
 # internal imports
 from .common import MLP
@@ -124,7 +125,7 @@ class Transformer(nn.Module):
         super().__init__()
         # variables
         self.context_size = context_size
-
+        self.head_size = emb_dim // n_heads
         self.embeddings = nn.Embedding(vocab_size, emb_dim)
         self.pos_encoding = nn.Embedding(self.context_size, emb_dim)
         self.blocks = nn.Sequential(*[Block(n_heads, emb_dim) for _ in range(n_layers)])
@@ -191,13 +192,13 @@ class Transformer(nn.Module):
     # based on it's relative position. As the authors propose, when compared to the original implementation 
     # in "Attention is All you Need" paper, we move from the additive implementation to a multiplicative one. 
     # This ensures that the norm of the embedding remains the same, and position is encoded through rotation.
-    def rope(self, emb_dim, theta: int=10000):
+    def rope(self, idx, theta: int=10000):
         """Implements the Rotary Position Embedding (RoPE)
         For this specific implementation of RoPE, I followed the instructions 
         presented in this video: http://youtube.com/watch?v=V8r__fXx7tU
         
         Args:
-            emb_dim: embedding dimension
+            idx: input tokens (B, T)
             theta: this is a hyperparameter. In both implementations, Vaswani et al. [2017] and
             RoPE, authors use it as 10000. Theta controls how fast the pairs of tokens will rotate. A bigger theta
             makes it rotate slower, a smaller theta, make them rotate faster.
@@ -210,4 +211,24 @@ class Transformer(nn.Module):
         # 2. Parameter free (in 3D there a much more ways you can rotate something and you can actually "learn" this as well)
         # 3. Interpretable
         # 4. Tests made, trying to learn hiugher order rotation, does not bring any gains.
-        assert emb_dim % 2 == 0
+        assert self.head_size % 2 == 0
+
+        # For the actual implementation, what we are going to do here is: We'll use the angular frequency formula 
+        # in order to calculate HOW MUCH each term must rotate. Formula is given by: w_k = 1/theta^{2k/d}, where 
+        # - w_k is the angular frequency
+        # - d is the head_size
+        # - k is the index of the pair we are selecting, where k in [0, d/2-1]
+        ang_freq = 1 / (theta**(torch.arange(0, self.head_size, 2, dtype=torch.float32, device=DEVICE) / self.head_size)) # (d/2)
+
+        # calculating the actual rotation for each position. Equivalent to m x \theta
+        B, T = idx.shape
+        pos = torch.arange(0, T, device=DEVICE) # (T)
+        out = torch.outer(pos, ang_freq) # (T, d/2)
+
+        # defining the rotation matrix
+        cos, sin = torch.cos(out), torch.sin(out)
+        out = torch.stack([cos, -sin, sin, cos], dim=-1) # (T, d/2, 4)
+        out = rearrange(out, "t d_half (i j) -> t d_half i j", i=2, j=2) # (T, d/2, 2, 2)
+
+        return out.float()
+
