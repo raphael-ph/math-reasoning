@@ -184,3 +184,14 @@ class Transformer(nn.Module):
             idx = torch.cat((idx, next_token), dim=-1)
 
         return idx, loss
+    
+    # --- Rotary Position Embedding (RoPE) ---
+    # The RoPE implementation follow the original paper from 2023 (https://arxiv.org/pdf/2104.09864),
+    # where authors propose the RoFormer. The main intuition behind RoPE is that you rotate each token
+    # based on it's relative position. As the authors propose, when compared to the original implementation 
+    # in "Attention is All you Need" paper, we move from the additive implementation to a multiplicative one. 
+    # This ensures that the norm of the embedding remains the same, and position is encoded through rotation.
+    #
+    # For this specific implementation of RoPE, I followed the instructions presented in this video: http://youtube.com/watch?v=V8r__fXx7tU
+    def rope(self, idx, theta: int=10000):
+        ...
