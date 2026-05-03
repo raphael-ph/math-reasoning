@@ -191,18 +191,18 @@ class Transformer(nn.Module):
     # based on it's relative position. As the authors propose, when compared to the original implementation 
     # in "Attention is All you Need" paper, we move from the additive implementation to a multiplicative one. 
     # This ensures that the norm of the embedding remains the same, and position is encoded through rotation.
-    def rope(self, idx, theta: int=10000):
+    def rope(self, emb_dim, theta: int=10000):
         """Implements the Rotary Position Embedding (RoPE)
         For this specific implementation of RoPE, I followed the instructions 
         presented in this video: http://youtube.com/watch?v=V8r__fXx7tU
         
         Args:
-            idx: input tokens (B, T)
+            emb_dim: embedding dimension
             theta: this is a hyperparameter. In both implementations, Vaswani et al. [2017] and
-            RoPE, authors use it as 10000. 
+            RoPE, authors use it as 10000. Theta controls how fast the pairs of tokens will rotate. A bigger theta
+            makes it rotate slower, a smaller theta, make them rotate faster.
         """
-        B, T = idx.shape
-        # assert that the Context Length is divisible by two. The original implementation extrapolates
+        # assert that the Embedding Dimension is divisible by two. The original implementation extrapolates
         # the 2D case for rotation and actually rotates each component of the embedding in blocks of 2. They
         # do not add much of an explanation, nor does the video. The video explains the Reasons for this, not 
         # the intuition:
@@ -210,4 +210,4 @@ class Transformer(nn.Module):
         # 2. Parameter free (in 3D there a much more ways you can rotate something and you can actually "learn" this as well)
         # 3. Interpretable
         # 4. Tests made, trying to learn hiugher order rotation, does not bring any gains.
-        assert T % 2 == 0
+        assert emb_dim % 2 == 0
