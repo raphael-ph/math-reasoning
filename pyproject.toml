@@ -18,3 +18,6 @@ dependencies = [
     "transformers>=4.57.1",
     "vastai-sdk>=0.2.6",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
