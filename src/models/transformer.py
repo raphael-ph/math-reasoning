@@ -25,6 +25,7 @@ class AttentionHead(nn.Module):
         # This is a fixed dim throughout the whole attention module. As per the paper:
         # >>> "To facilitate these residual connections, all sub-layers in the model, \
         # >>> as well as the embedding layers, produce outputs of dimension d_model = 512."
+        self.head_size = head_size
         self.k = nn.Linear(emb_dim, head_size, bias=False)
         self.q = nn.Linear(emb_dim, head_size, bias=False)
         self.v = nn.Linear(emb_dim, head_size, bias=False)
@@ -36,7 +37,7 @@ class AttentionHead(nn.Module):
     # based on it's relative position. As the authors propose, when compared to the original implementation 
     # in "Attention is All you Need" paper, we move from the additive implementation to a multiplicative one. 
     # This ensures that the norm of the embedding remains the same, and position is encoded through rotation.
-    def precompute_freqs_cis(self, idx, theta: int=10000):
+    def precompute_freqs_cis(self, T, theta: int=10000):
         """Implements the Rotary Position Embedding (RoPE)
         For this specific implementation of RoPE, I followed the instructions 
         presented in this video: http://youtube.com/watch?v=V8r__fXx7tU
@@ -46,7 +47,7 @@ class AttentionHead(nn.Module):
         and apply it on the forward pass.
         
         Args:
-            idx: input tokens (B, T)
+            T: temporal component (sequence length)
             theta: this is a hyperparameter. In both implementations, Vaswani et al. [2017] and
             RoPE, authors use it as 10000. Theta controls how fast the pairs of tokens will rotate. A bigger theta
             makes it rotate slower, a smaller theta, make them rotate faster.
@@ -69,7 +70,6 @@ class AttentionHead(nn.Module):
         freqs = 1 / (theta**(torch.arange(0, self.head_size, 2, dtype=torch.float32, device=DEVICE) / self.head_size)) # (d/2)
 
         # calculating the actual rotation for each position. Equivalent to m x \theta
-        _, T = idx.shape
         t = torch.arange(0, T, device=DEVICE)                   # (T)
         freqs = torch.outer(t, freqs)                           # (T, d/2) 
         freqs_cis = torch.repeat_interleave(freqs, 2, dim=-1)   # (T, d)
