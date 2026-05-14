@@ -243,7 +243,7 @@ class Transformer(nn.Module):
         # This logic allows us to use the forward pass for training and for generating:
         # if targets are provided, the model will be trained. If targets are not passed, the model simply outputs
         # the logits, which are then used on softmax.
-        if not targets:
+        if targets is None:
             loss = None
         else:
             B, T, C = logits.shape
