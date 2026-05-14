@@ -31,6 +31,7 @@ class AttentionHead(nn.Module):
         self.v = nn.Linear(emb_dim, head_size, bias=False)
         self.dropout = nn.Dropout(dropout)
 
+
         self.register_buffer(
             'tril',
             torch.tril(torch.ones(self.block_size,self.block_size))
@@ -133,8 +134,7 @@ class AttentionHead(nn.Module):
         # masking on the "future" information, which means the tokens that are still to come.
         # Karpathy's implementation uses the torch.register_buffer() function.
         # TO DO: Explore which are the pros and cons of my current implementation
-        tril = torch.ones(T, T).tril()
-        wei = wei.masked_fill(tril == 0, float("-inf"))
+        wei = wei.masked_fill(self.tril == 0, float("-inf"))
 
         # Softmax(weights)
         wei = F.softmax(wei, -1) # apply softmax to the Channel dim, so we get the probs for the embeddings
