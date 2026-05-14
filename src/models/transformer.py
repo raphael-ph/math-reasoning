@@ -236,7 +236,7 @@ class Transformer(nn.Module):
 
         return cos, sin
      
-    def rotate_half(self, x):
+    def _rotate_half(self, x):
         """Implementing the computational efficient realization of rotary matrix multiplication
 
         This shows on original paper (https://arxiv.org/pdf/2104.09864), section 3.4.2
@@ -251,7 +251,7 @@ class Transformer(nn.Module):
         """Apply rope to Query and Key values"""
         cos = cos.unsqueeze(0)
         sin = sin.unsqueeze(0)
-        q_emb = (q * cos) + (self.rotate_half(q) * sin)
-        k_emb = (k * cos) + (self.rotate_half(k) * sin)
+        q_emb = (q * cos) + (self._rotate_half(q) * sin)
+        k_emb = (k * cos) + (self._rotate_half(k) * sin)
 
         return q_emb, k_emb
