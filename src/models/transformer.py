@@ -19,19 +19,20 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 # --- Attention Head ---
 class AttentionHead(nn.Module):
     """Single head of Attention"""
-    def __init__(self, emb_dim: int, head_size: int, dropout: float = 0.2):
+    def __init__(self, emb_dim: int, head_size: int, context_size: int, dropout: float = 0.2):
         super().__init__()
         # The authors use a fixed d_model = 512. That is our "head_size"
         # This is a fixed dim throughout the whole attention module. As per the paper:
         # >>> "To facilitate these residual connections, all sub-layers in the model, \
         # >>> as well as the embedding layers, produce outputs of dimension d_model = 512."
         self.head_size = head_size
+        self.block_size = context_size
         self.k = nn.Linear(emb_dim, head_size, bias=False)
         self.q = nn.Linear(emb_dim, head_size, bias=False)
         self.v = nn.Linear(emb_dim, head_size, bias=False)
         self.dropout = nn.Dropout(dropout)
 
-
+        
         self.register_buffer(
             'tril',
             torch.tril(torch.ones(self.block_size,self.block_size))
@@ -121,7 +122,7 @@ class AttentionHead(nn.Module):
         # As per the original paper, authors propose that RoPE is added directly at the attention head:
         # >>> "Since RoPE injects position information by rotation, which keeps the norm of hidden representations unchanged, 
         # >>> we can combine RoPE with linear attention by multiplying the rotation matrix with the outputs of the non-negative functions.""
-        cos, sin = self.precompute_freqs_cis(x)
+        cos, sin = self.precompute_freqs_cis(T)
         Q, K = self.rope(Q, K, cos, sin)
 
         # Matmul(Q, K) = weights and Scale(weights)
@@ -133,8 +134,7 @@ class AttentionHead(nn.Module):
         # Since this implementation is for the decoder, it is necessary to apply the 
         # masking on the "future" information, which means the tokens that are still to come.
         # Karpathy's implementation uses the torch.register_buffer() function.
-        # TO DO: Explore which are the pros and cons of my current implementation
-        wei = wei.masked_fill(self.tril == 0, float("-inf"))
+        wei = wei.masked_fill(self.tril[:T, :T] == 0, float("-inf"))
 
         # Softmax(weights)
         wei = F.softmax(wei, -1) # apply softmax to the Channel dim, so we get the probs for the embeddings
@@ -152,9 +152,9 @@ class AttentionHead(nn.Module):
 
 # --- Multi-Head Attention ---
 class MultiHeadAttention(nn.Module):
-    def __init__(self, n_heads: int, emb_dim: int, head_size: int, dropout: float = 0.2):
+    def __init__(self, n_heads: int, emb_dim: int, head_size: int, context_size: int, dropout: float = 0.2):
         super().__init__()
-        self.heads = nn.ModuleList([AttentionHead(emb_dim, head_size) for _ in range(n_heads)])
+        self.heads = nn.ModuleList([AttentionHead(emb_dim, head_size, context_size) for _ in range(n_heads)])
         self.linear = nn.Linear(emb_dim, emb_dim)
         self.dropout = nn.Dropout(dropout)
 
@@ -176,7 +176,7 @@ class MultiHeadAttention(nn.Module):
 
 # --- Transformer Block ---
 class Block(nn.Module):
-    def __init__(self, n_heads: int, emb_dim: int):
+    def __init__(self, n_heads: int, emb_dim: int, context_size: int):
         """Implementation of the Transformer block. 
         
         Inspired by Karpathy, this implementation does not have the "second" multi-head attention
@@ -186,7 +186,7 @@ class Block(nn.Module):
         head_size = emb_dim//n_heads
 
         # "core" of the transformer
-        self.self_attention = MultiHeadAttention(n_heads, emb_dim, head_size)
+        self.self_attention = MultiHeadAttention(n_heads, emb_dim, head_size, context_size)
         self.ffwd = MLP(in_dim=emb_dim, out_dim=emb_dim, hidden_dim=4*emb_dim, hidden_layers=1) # simpe ffwd net
 
         # normalization
@@ -209,7 +209,7 @@ class Transformer(nn.Module):
         self.head_size = emb_dim // n_heads
         self.embeddings = nn.Embedding(vocab_size, emb_dim)
         self.pos_encoding = nn.Embedding(self.context_size, emb_dim)
-        self.blocks = nn.Sequential(*[Block(n_heads, emb_dim) for _ in range(n_layers)])
+        self.blocks = nn.Sequential(*[Block(n_heads, emb_dim, context_size) for _ in range(n_layers)])
         self.layer_norm = nn.LayerNorm(emb_dim)
         self.linear = nn.Linear(emb_dim, vocab_size)
     
