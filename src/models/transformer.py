@@ -30,6 +30,11 @@ class AttentionHead(nn.Module):
         self.q = nn.Linear(emb_dim, head_size, bias=False)
         self.v = nn.Linear(emb_dim, head_size, bias=False)
         self.dropout = nn.Dropout(dropout)
+
+        self.register_buffer(
+            'tril',
+            torch.tril(torch.ones(self.block_size,self.block_size))
+        )
     
     # --- Rotary Position Embedding (RoPE) ---
     # The RoPE implementation follow the original paper from 2023 (https://arxiv.org/pdf/2104.09864),
