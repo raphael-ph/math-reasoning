@@ -108,10 +108,15 @@ class AttentionHead(nn.Module):
         >>> Matmul(Q, K) = weights -> Scale(weights) -> Mask(weights) -> Softmax(weights) -> Matmul(wei, V)
         """
         B, T, C = x.shape
-
         # Key, Query first go through a Linear transformation. 
         K = self.k(x) # (B, T, C) -> batch, context window, channels (embeddings)
         Q = self.q(x)
+
+        # As per the original paper, authors propose that RoPE is added directly at the attention head:
+        # >>> "Since RoPE injects position information by rotation, which keeps the norm of hidden representations unchanged, 
+        # >>> we can combine RoPE with linear attention by multiplying the rotation matrix with the outputs of the non-negative functions.""
+        cos, sin = self.precompute_freqs_cis(x)
+        Q, K = self.rope(Q, K, cos, sin)
 
         # Matmul(Q, K) = weights and Scale(weights)
         # following the paper implementation, after the Matmul, the weights
@@ -218,9 +223,14 @@ class Transformer(nn.Module):
         # >>> we must inject some information about the relative or absolute position of the tokens in the sequence.""
         #
         # In the paper, the authors use a Sine function to represent the positional encoding.
-        # TO DO: implement Sine PE
-        positional_encoding = self.pos_encoding(torch.arange(T, device=DEVICE)) # (B, T) -> (B, T, C) adds embeddings for the position
-        x = token_embeddings + positional_encoding
+        # ==== UPDATE ====
+        # The original implementation uses Sine. As per 2021 and beyond, the industry pattern is using RoPE, which is implemented directly in the attention
+        # head. I left my legacy implementation here as a legacy demonstration of what I did before RoPE. The legacy implementation followed
+        # Karpathy's video.
+        # 
+        # positional_encoding = self.pos_encoding(torch.arange(T, device=DEVICE)) # (B, T) -> (B, T, C) adds embeddings for the position
+        # x = token_embeddings + positional_encoding
+        x = token_embeddings
         x = self.blocks(x)
         x = self.layer_norm(x)
         logits = self.linear(x) # (B, T, C) -> (B, T, vocab_size)
