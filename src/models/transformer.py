@@ -29,6 +29,76 @@ class AttentionHead(nn.Module):
         self.q = nn.Linear(emb_dim, head_size, bias=False)
         self.v = nn.Linear(emb_dim, head_size, bias=False)
         self.dropout = nn.Dropout(dropout)
+    
+    # --- Rotary Position Embedding (RoPE) ---
+    # The RoPE implementation follow the original paper from 2023 (https://arxiv.org/pdf/2104.09864),
+    # where authors propose the RoFormer. The main intuition behind RoPE is that you rotate each token
+    # based on it's relative position. As the authors propose, when compared to the original implementation 
+    # in "Attention is All you Need" paper, we move from the additive implementation to a multiplicative one. 
+    # This ensures that the norm of the embedding remains the same, and position is encoded through rotation.
+    def precompute_freqs_cis(self, idx, theta: int=10000):
+        """Implements the Rotary Position Embedding (RoPE)
+        For this specific implementation of RoPE, I followed the instructions 
+        presented in this video: http://youtube.com/watch?v=V8r__fXx7tU
+
+        There is actually a twist in this implementation when compared to the video: Hugging Face transformers
+        has a different perspective on calculating RoPE. It precomputes the Rotation Matrix during initialization
+        and apply it on the forward pass.
+        
+        Args:
+            idx: input tokens (B, T)
+            theta: this is a hyperparameter. In both implementations, Vaswani et al. [2017] and
+            RoPE, authors use it as 10000. Theta controls how fast the pairs of tokens will rotate. A bigger theta
+            makes it rotate slower, a smaller theta, make them rotate faster.
+        """
+        # assert that the Embedding Dimension is divisible by two. The original implementation extrapolates
+        # the 2D case for rotation and actually rotates each component of the embedding in blocks of 2. They
+        # do not add much of an explanation, nor does the video. The video explains the Reasons for this, not 
+        # the intuition:
+        # 1. Efficient & fast 
+        # 2. Parameter free (in 3D there a much more ways you can rotate something and you can actually "learn" this as well)
+        # 3. Interpretable
+        # 4. Tests made, trying to learn hiugher order rotation, does not bring any gains.
+        assert self.head_size % 2 == 0
+
+        # For the actual implementation, what we are going to do here is: We'll use the angular frequency formula 
+        # in order to calculate HOW MUCH each term must rotate. Formula is given by: w_k = 1/theta^{2k/d}, where 
+        # - w_k is the angular frequency
+        # - d is the head_size
+        # - k is the index of the pair we are selecting, where k in [0, d/2-1]
+        freqs = 1 / (theta**(torch.arange(0, self.head_size, 2, dtype=torch.float32, device=DEVICE) / self.head_size)) # (d/2)
+
+        # calculating the actual rotation for each position. Equivalent to m x \theta
+        _, T = idx.shape
+        t = torch.arange(0, T, device=DEVICE)                   # (T)
+        freqs = torch.outer(t, freqs)                           # (T, d/2) 
+        freqs_cis = torch.repeat_interleave(freqs, 2, dim=-1)   # (T, d)
+
+        # defining the rotation matrix
+        cos = torch.cos(freqs_cis)  # (T, d)
+        sin = torch.sin(freqs_cis)  # (T, d)
+
+        return cos, sin
+     
+    def _rotate_half(self, x):
+        """Implementing the computational efficient realization of rotary matrix multiplication
+
+        This shows on original paper (https://arxiv.org/pdf/2104.09864), section 3.4.2
+        """
+        x1 = x[..., 0::2] # Even Indices          (B, T, C/2)
+        x2 = x[..., 1::2] # Odd indices           (B, T, C/2)
+        out = torch.stack([-x2, x1], dim=-1)    # (B, T, C/2, 2)
+
+        return out.flatten(-2)                  # (B, T, C)
+
+    def rope(self, q, k, cos, sin):
+        """Apply rope to Query and Key values"""
+        cos = cos.unsqueeze(0)
+        sin = sin.unsqueeze(0)
+        q_emb = (q * cos) + (self._rotate_half(q) * sin)
+        k_emb = (k * cos) + (self._rotate_half(k) * sin)
+
+        return q_emb, k_emb
 
     def forward(self, x):
         """Implementation of the forward pass of the Attention Head
@@ -38,6 +108,7 @@ class AttentionHead(nn.Module):
         >>> Matmul(Q, K) = weights -> Scale(weights) -> Mask(weights) -> Softmax(weights) -> Matmul(wei, V)
         """
         B, T, C = x.shape
+
         # Key, Query first go through a Linear transformation. 
         K = self.k(x) # (B, T, C) -> batch, context window, channels (embeddings)
         Q = self.q(x)
@@ -185,73 +256,3 @@ class Transformer(nn.Module):
             idx = torch.cat((idx, next_token), dim=-1)
 
         return idx, loss
-    
-    # --- Rotary Position Embedding (RoPE) ---
-    # The RoPE implementation follow the original paper from 2023 (https://arxiv.org/pdf/2104.09864),
-    # where authors propose the RoFormer. The main intuition behind RoPE is that you rotate each token
-    # based on it's relative position. As the authors propose, when compared to the original implementation 
-    # in "Attention is All you Need" paper, we move from the additive implementation to a multiplicative one. 
-    # This ensures that the norm of the embedding remains the same, and position is encoded through rotation.
-    def precompute_freqs_cis(self, idx, theta: int=10000):
-        """Implements the Rotary Position Embedding (RoPE)
-        For this specific implementation of RoPE, I followed the instructions 
-        presented in this video: http://youtube.com/watch?v=V8r__fXx7tU
-
-        There is actually a twist in this implementation when compared to the video: Hugging Face transformers
-        has a different perspective on calculating RoPE. It precomputes the Rotation Matrix during initialization
-        and apply it on the forward pass.
-        
-        Args:
-            idx: input tokens (B, T)
-            theta: this is a hyperparameter. In both implementations, Vaswani et al. [2017] and
-            RoPE, authors use it as 10000. Theta controls how fast the pairs of tokens will rotate. A bigger theta
-            makes it rotate slower, a smaller theta, make them rotate faster.
-        """
-        # assert that the Embedding Dimension is divisible by two. The original implementation extrapolates
-        # the 2D case for rotation and actually rotates each component of the embedding in blocks of 2. They
-        # do not add much of an explanation, nor does the video. The video explains the Reasons for this, not 
-        # the intuition:
-        # 1. Efficient & fast 
-        # 2. Parameter free (in 3D there a much more ways you can rotate something and you can actually "learn" this as well)
-        # 3. Interpretable
-        # 4. Tests made, trying to learn hiugher order rotation, does not bring any gains.
-        assert self.head_size % 2 == 0
-
-        # For the actual implementation, what we are going to do here is: We'll use the angular frequency formula 
-        # in order to calculate HOW MUCH each term must rotate. Formula is given by: w_k = 1/theta^{2k/d}, where 
-        # - w_k is the angular frequency
-        # - d is the head_size
-        # - k is the index of the pair we are selecting, where k in [0, d/2-1]
-        freqs = 1 / (theta**(torch.arange(0, self.head_size, 2, dtype=torch.float32, device=DEVICE) / self.head_size)) # (d/2)
-
-        # calculating the actual rotation for each position. Equivalent to m x \theta
-        _, T = idx.shape
-        t = torch.arange(0, T, device=DEVICE)                   # (T)
-        freqs = torch.outer(t, freqs)                           # (T, d/2) 
-        freqs_cis = torch.repeat_interleave(freqs, 2, dim=-1)   # (T, d)
-
-        # defining the rotation matrix
-        cos = torch.cos(freqs_cis)  # (T, d)
-        sin = torch.sin(freqs_cis)  # (T, d)
-
-        return cos, sin
-     
-    def _rotate_half(self, x):
-        """Implementing the computational efficient realization of rotary matrix multiplication
-
-        This shows on original paper (https://arxiv.org/pdf/2104.09864), section 3.4.2
-        """
-        x1 = x[..., 0::2] # Even Indices          (B, T, C/2)
-        x2 = x[..., 1::2] # Odd indices           (B, T, C/2)
-        out = torch.stack([-x2, x1], dim=-1)    # (B, T, C/2, 2)
-
-        return out.flatten(-2)                  # (B, T, C)
-
-    def rope(self, q, k, cos, sin):
-        """Apply rope to Query and Key values"""
-        cos = cos.unsqueeze(0)
-        sin = sin.unsqueeze(0)
-        q_emb = (q * cos) + (self._rotate_half(q) * sin)
-        k_emb = (k * cos) + (self._rotate_half(k) * sin)
-
-        return q_emb, k_emb
