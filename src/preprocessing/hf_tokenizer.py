@@ -32,7 +32,17 @@ def train_fast_tokenizer():
     # The library handles the merge math in Rust (C++ speed).
     trainer = trainers.BpeTrainer(
         vocab_size=VOCAB_SIZE,
-        special_tokens=["<|endoftext|>", "<|fim_prefix|>", "<|fim_middle|>", "<|fim_suffix|>", "<|pad|>"], 
+        special_tokens=["<|endoftext|>", 
+                        "<|fim_prefix|>", 
+                        "<|fim_middle|>", 
+                        "<|fim_suffix|>", 
+                        "<|pad|>", 
+                        "<|bos|>",
+                        # User and assistant will be used in post-training, in order to teach the model
+                        # the conversation flow.
+                        "<|user|>",
+                        "<|assistant|>",
+                        ], 
         show_progress=True
     )
 
