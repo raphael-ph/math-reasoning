@@ -1,8 +1,7 @@
 # internal imports
 from src.utils.logger import get_logger
 from src.preprocessing.hf_tokenizer import train_fast_tokenizer
-from src.preprocessing.loader import RepoLoader, HuggingFaceLoader, CorpusBlender
-from src.utils.runner import train_tokenizer_remote
+from src.preprocessing.ds_loader import RepoLoader, HuggingFaceLoader, CorpusBlender
 
 logger = get_logger("main", level="INFO")
 
