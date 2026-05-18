@@ -353,6 +353,13 @@ def scrape_s3_dataset(
 
     print(f"  Done. {total_tokens/1e6:.0f}M tokens | "
           f"SymPy: {sympy_count} | Skipped: {skipped}")
+
+    # Clean up metadata — no longer needed once shards are written
+    if meta_dir.exists():
+        import shutil
+        shutil.rmtree(meta_dir)
+        print(f"  Cleaned up metadata dir: {meta_dir}")
+
     return total_tokens
 
 
