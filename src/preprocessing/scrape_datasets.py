@@ -162,7 +162,14 @@ class ShardWriter:
 
 def make_s3_downloader():
     """Downloads file content from Software Heritage public S3."""
-    s3 = boto3.client("s3", region_name="us-east-1")
+    from botocore import UNSIGNED
+    from botocore.config import Config
+
+    s3 = boto3.client(
+        "s3",
+        region_name="us-east-1",
+        config=Config(signature_version=UNSIGNED),
+    )
 
     def download(blob_id: str) -> str | None:
         try:
@@ -440,7 +447,7 @@ def main():
         description="Scrape pretraining datasets for math formalizer model"
     )
     parser.add_argument("--output_dir", type=str, default="./pretraining_data")
-    parser.add_argument("--max_tokens", type=int, default=12_000_000_000,
+    parser.add_argument("--max_tokens", type=int, default=10_000_000_000,
                         help="Total approximate token budget (default 10B)")
     parser.add_argument("--datasets", nargs="+",
                         choices=list(SCRAPERS.keys()) + ["all"],
