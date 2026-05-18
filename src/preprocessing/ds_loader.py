@@ -440,7 +440,7 @@ def main():
         description="Scrape pretraining datasets for math formalizer model"
     )
     parser.add_argument("--output_dir", type=str, default="./pretraining_data")
-    parser.add_argument("--max_tokens", type=int, default=10_000_000_000,
+    parser.add_argument("--max_tokens", type=int, default=12_000_000_000,
                         help="Total approximate token budget (default 10B)")
     parser.add_argument("--datasets", nargs="+",
                         choices=list(SCRAPERS.keys()) + ["all"],
