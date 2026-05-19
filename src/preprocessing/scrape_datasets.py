@@ -108,7 +108,7 @@ def load_checkpoint(dataset_dir: Path, name: str) -> dict:
         with open(path) as f:
             return json.load(f)
     return {"last_idx": 0, "total_tokens": 0, "shard_idx": 0,
-            "sympy_count": 0, "skipped": 0}
+            "sympy_count": 0, "skipped": 0, "completed": False}
 
 
 def save_checkpoint(dataset_dir: Path, name: str, state: dict) -> None:
@@ -267,6 +267,15 @@ def scrape_s3_dataset(
     dataset_dir.mkdir(parents=True, exist_ok=True)
     meta_dir    = output_dir / f"{name}_meta"
 
+    # FIX 1: always define ckpt, then check completed
+    ckpt = load_checkpoint(dataset_dir, name) if resume else \
+           {"last_idx": 0, "total_tokens": 0, "shard_idx": 0,
+            "sympy_count": 0, "skipped": 0, "completed": False}
+
+    if ckpt.get("completed", False):
+        print(f"  Already completed ({ckpt['total_tokens']/1e6:.0f}M tokens) — skipping.")
+        return ckpt["total_tokens"]
+
     # Download metadata parquet if not already present
     if not meta_dir.exists() or not any(meta_dir.rglob("*.parquet")):
         download_metadata(repo_id, meta_patterns, meta_dir)
@@ -274,11 +283,6 @@ def scrape_s3_dataset(
         print(f"  Metadata already downloaded at {meta_dir}")
 
     df = load_parquet_metadata(meta_dir, meta_parquet_glob)
-
-    # Load checkpoint
-    ckpt = load_checkpoint(dataset_dir, name) if resume else \
-           {"last_idx": 0, "total_tokens": 0, "shard_idx": 0,
-            "sympy_count": 0, "skipped": 0}
 
     start_idx    = ckpt["last_idx"]
     sympy_count  = ckpt["sympy_count"]
@@ -332,23 +336,25 @@ def scrape_s3_dataset(
             # Checkpoint
             if docs_since_ckpt >= CHECKPOINT_EVERY:
                 save_checkpoint(dataset_dir, name, {
-                    "last_idx":    batch_start + S3_BATCH_SIZE,
+                    "last_idx":     batch_start + S3_BATCH_SIZE,
                     "total_tokens": writer.total_tokens,
-                    "shard_idx":   writer.shard_idx,
-                    "sympy_count": sympy_count,
-                    "skipped":     skipped,
+                    "shard_idx":    writer.shard_idx,
+                    "sympy_count":  sympy_count,
+                    "skipped":      skipped,
+                    "completed":    False,
                 })
                 docs_since_ckpt = 0
 
     total_tokens = writer.finalize()
 
-    # Final checkpoint
+    # FIX 2: mark completed in final checkpoint
     save_checkpoint(dataset_dir, name, {
-        "last_idx":    total,
+        "last_idx":     total,
         "total_tokens": total_tokens,
-        "shard_idx":   writer.shard_idx,
-        "sympy_count": sympy_count,
-        "skipped":     skipped,
+        "shard_idx":    writer.shard_idx,
+        "sympy_count":  sympy_count,
+        "skipped":      skipped,
+        "completed":    True,
     })
 
     print(f"  Done. {total_tokens/1e6:.0f}M tokens | "
@@ -423,12 +429,17 @@ def scrape_algebraic_stack(output_dir: Path, token_budget: int, resume: bool) ->
 
     ckpt = load_checkpoint(dataset_dir, "algebraic_stack") if resume else \
            {"last_idx": 0, "total_tokens": 0, "shard_idx": 0,
-            "sympy_count": 0, "skipped_lang": 0, "skipped_empty": 0}
+            "sympy_count": 0, "skipped_lang": 0, "skipped_empty": 0,
+            "completed": False}
+
+    if ckpt.get("completed", False):
+        print(f"  Already completed ({ckpt['total_tokens']/1e6:.0f}M tokens) — skipping.")
+        return ckpt["total_tokens"]
 
     skip_n        = ckpt["last_idx"]
-    sympy_count   = ckpt["sympy_count"]
-    skipped_lang  = ckpt["skipped_lang"]
-    skipped_empty = ckpt["skipped_empty"]
+    sympy_count   = ckpt.get("sympy_count", 0)
+    skipped_lang  = ckpt.get("skipped_lang", 0)
+    skipped_empty = ckpt.get("skipped_empty", 0)
 
     if resume and skip_n > 0:
         print(f"  Resuming from doc {skip_n:,}")
@@ -481,23 +492,25 @@ def scrape_algebraic_stack(output_dir: Path, token_budget: int, resume: bool) ->
 
             if docs_since_ckpt >= CHECKPOINT_EVERY:
                 save_checkpoint(dataset_dir, "algebraic_stack", {
-                    "last_idx":     seen,
-                    "total_tokens": writer.total_tokens,
-                    "shard_idx":    writer.shard_idx,
-                    "sympy_count":  sympy_count,
-                    "skipped_lang": skipped_lang,
+                    "last_idx":      seen,
+                    "total_tokens":  writer.total_tokens,
+                    "shard_idx":     writer.shard_idx,
+                    "sympy_count":   sympy_count,
+                    "skipped_lang":  skipped_lang,
                     "skipped_empty": skipped_empty,
+                    "completed":     False,
                 })
                 docs_since_ckpt = 0
 
     total_tokens = writer.finalize()
     save_checkpoint(dataset_dir, "algebraic_stack", {
-        "last_idx":     seen,
-        "total_tokens": total_tokens,
-        "shard_idx":    writer.shard_idx,
-        "sympy_count":  sympy_count,
-        "skipped_lang": skipped_lang,
+        "last_idx":      seen,
+        "total_tokens":  total_tokens,
+        "shard_idx":     writer.shard_idx,
+        "sympy_count":   sympy_count,
+        "skipped_lang":  skipped_lang,
         "skipped_empty": skipped_empty,
+        "completed":     True,
     })
     print(f"  Done. {total_tokens/1e6:.0f}M tokens | SymPy: {sympy_count} "
           f"| Skipped lang: {skipped_lang} | Skipped empty: {skipped_empty}")
@@ -519,11 +532,15 @@ def scrape_arxiv_math(output_dir: Path, token_budget: int, resume: bool) -> int:
 
     ckpt = load_checkpoint(dataset_dir, "arxiv_math") if resume else \
            {"last_idx": 0, "total_tokens": 0, "shard_idx": 0,
-            "skipped_not_math": 0, "skipped_empty": 0}
+            "skipped_not_math": 0, "skipped_empty": 0, "completed": False}
+
+    if ckpt.get("completed", False):
+        print(f"  Already completed ({ckpt['total_tokens']/1e6:.0f}M tokens) — skipping.")
+        return ckpt["total_tokens"]
 
     skip_n           = ckpt["last_idx"]
-    skipped_not_math = ckpt["skipped_not_math"]
-    skipped_empty    = ckpt["skipped_empty"]
+    skipped_not_math = ckpt.get("skipped_not_math", 0)
+    skipped_empty    = ckpt.get("skipped_empty", 0)
 
     if resume and skip_n > 0:
         print(f"  Resuming from doc {skip_n:,}")
@@ -568,6 +585,7 @@ def scrape_arxiv_math(output_dir: Path, token_budget: int, resume: bool) -> int:
                     "shard_idx":         writer.shard_idx,
                     "skipped_not_math":  skipped_not_math,
                     "skipped_empty":     skipped_empty,
+                    "completed":         False,
                 })
                 docs_since_ckpt = 0
 
@@ -578,6 +596,7 @@ def scrape_arxiv_math(output_dir: Path, token_budget: int, resume: bool) -> int:
         "shard_idx":        writer.shard_idx,
         "skipped_not_math": skipped_not_math,
         "skipped_empty":    skipped_empty,
+        "completed":        True,
     })
     print(f"  Done. {total_tokens/1e6:.0f}M tokens "
           f"| Skipped (not math): {skipped_not_math} "
