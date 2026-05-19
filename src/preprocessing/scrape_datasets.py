@@ -436,7 +436,7 @@ def scrape_algebraic_stack(output_dir: Path, token_budget: int, resume: bool) ->
     writer = ShardWriter(dataset_dir, "algebraic_stack",
                          ckpt["shard_idx"], ckpt["total_tokens"])
     ds     = load_dataset("EleutherAI/proof-pile-2", "algebraic-stack",
-                          split="train", streaming=True)
+                          split="train", streaming=True, trust_remote_code=True)
 
     seen            = 0
     docs_since_ckpt = 0
@@ -531,7 +531,7 @@ def scrape_arxiv_math(output_dir: Path, token_budget: int, resume: bool) -> int:
     writer = ShardWriter(dataset_dir, "arxiv_math",
                          ckpt["shard_idx"], ckpt["total_tokens"])
     ds     = load_dataset("EleutherAI/proof-pile-2", "arxiv",
-                          split="train", streaming=True)
+                          split="train", streaming=True, trust_remote_code=True)
 
     seen            = 0
     docs_since_ckpt = 0
