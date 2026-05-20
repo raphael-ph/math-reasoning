@@ -1,4 +1,6 @@
 import time
+from pathlib import Path
+import pyarrow.parquet as pq
 from tokenizers import Tokenizer, models, trainers, pre_tokenizers, decoders
 
 # internal imports
@@ -6,11 +8,14 @@ from ..utils.logger import get_logger
 
 _logger = get_logger("hf_tokenizer", level="DEBUG")
 
-VOCAB_SIZE = 12261
-DATASET_PATH = "data/corpus/final_training_corpus.txt"
-MODEL_SAVE_PATH = "data/vocab/fast_tokenizer.json"
+VOCAB_SIZE = 32000 # based on llama 2: 
+DIRECTORY_PATH = Path("./data/pretraining")
+MODEL_SAVE_PATH = Path("./data/vocab/fast_tokenizer.json")
+MODEL_SAVE_PATH.parent.mkdir(exist_ok=True, parents=True) # create if does not exist
 
-def train_fast_tokenizer():
+FILE_EXT = ".parquet"
+
+def train_tokenizer():
     _logger.info(f"--- Starting Rust-based training (Target Vocab: {VOCAB_SIZE}) ---")
     start_time = time.time()
 
@@ -43,15 +48,13 @@ def train_fast_tokenizer():
                         "<|user|>",
                         "<|assistant|>",
                         ], 
-        show_progress=True
+        show_progress=True,
+        min_frequency=2,
     )
 
-    _logger.info(f"Reading {DATASET_PATH} and training...")
-    try:
-        tokenizer.train([DATASET_PATH], trainer)
-    except Exception as e:
-        _logger.info(f"\nError: Could not find file '{DATASET_PATH}'. Please check the path.")
-        return
+    _logger.info(f"Reading {DIRECTORY_PATH} and training...")
+    tokenizer.train_from_iterator(_iter_all_documents(DIRECTORY_PATH), trainer)
+
 
     end_time = time.time()
     elapsed = end_time - start_time
@@ -63,8 +66,17 @@ def train_fast_tokenizer():
     _logger.info(f"DONE!")
     _logger.info(f"Total Time: {elapsed:.2f} seconds ({elapsed/60:.2f} minutes)")
     _logger.info(f"Vocab Size: {tokenizer.get_vocab_size()}")
-    _logger.info(f"Saved to:   {MODEL_SAVE_PATH}")
+    _logger.info(f"Saved to:   {MODEL_SAVE_PATH}")  
     _logger.info("="*40)
 
+# --- Helper Functions ---
+def _iter_all_documents(directory: Path):
+    for item in directory.iterdir():
+            if item.is_dir():
+                for shard in item.glob(f"*{FILE_EXT}"):
+                    pf = pq.ParquetFile(shard)
+                    for batch in pf.iter_batches(columns=["text"]):
+                        yield from batch.column("text").to_pylist()
+
 if __name__ == "__main__":
-    train_fast_tokenizer()
+    train_tokenizer()
