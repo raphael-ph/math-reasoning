@@ -16,7 +16,7 @@ MODEL_SAVE_PATH.parent.mkdir(exist_ok=True, parents=True) # create if does not e
 FILE_EXT = ".parquet"
 
 def train_tokenizer():
-    _logger.info(f"--- Starting Rust-based training (Target Vocab: {VOCAB_SIZE}) ---")
+    _logger.info(f"--- Starting HF-Tokenizer training (Target Vocab: {VOCAB_SIZE}) ---")
     start_time = time.time()
 
     # Initialize a BPE Tokenizer
