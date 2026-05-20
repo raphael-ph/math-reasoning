@@ -60,7 +60,7 @@ def train_tokenizer():
     elapsed = end_time - start_time
 
     # Save
-    tokenizer.save(MODEL_SAVE_PATH)
+    tokenizer.save(str(MODEL_SAVE_PATH))
 
     _logger.info("\n" + "="*40)
     _logger.info(f"DONE!")
