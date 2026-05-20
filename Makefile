@@ -5,3 +5,6 @@ train:
 
 test:
 	pytest tests --verbose
+
+train-tokenizer:
+	uv run -m src.preprocessing.hf_tokenizer
