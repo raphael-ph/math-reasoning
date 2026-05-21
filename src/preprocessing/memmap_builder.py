@@ -55,7 +55,18 @@ def main():
     _logger.info("="*60)
     _logger.info("** Initiating MemMap Builder 2nd Pass - Creating MemMap File **")
 
-
+    arr_len = total_tok
+    filename = "./data/corpus/corpus.bin"
+    dtype = np.uint16
+    arr = np.memmap(filename, dtype=dtype, mode='w+', shape=(arr_len,))
+    
+    offset = 0
+    for text in tqdm(_iter_all_documents(PRETRAINING_DIR), desc=f'writing {filename}'):
+        out = process(text)
+        # Write into mmap
+        arr[offset : offset + len(out["ids"])] = out["ids"]
+        offset += len(out["ids"])
+    arr.flush()
 
 if __name__ == "__main__":
     main()
