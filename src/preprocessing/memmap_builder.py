@@ -36,10 +36,8 @@ def _iter_all_documents(directory: Path):
                     yield from batch.column("text").to_pylist()
 
 def process(text: str):
-    ids = tokenizer.encode(text).ids
     ids = [BOS_ID] + tokenizer.encode(text).ids + [EOT_ID]
     out = {"ids": ids, "len": len(ids)}
-    
     return out
 
 # --- Main Function ---
