@@ -83,7 +83,7 @@ LATEX_MIN_HITS = 10
 # ---------------------------------------------------------------------------
 
 def count_tokens_approx(text: str) -> int:
-    return len(text) // 4
+    return len(text) // 3
 
 
 def is_sympy_file(text: str) -> bool:
