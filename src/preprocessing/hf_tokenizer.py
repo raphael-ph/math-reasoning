@@ -10,7 +10,7 @@ _logger = get_logger("hf_tokenizer", level="DEBUG")
 
 VOCAB_SIZE = 32000 # based on llama 2: 
 DIRECTORY_PATH = Path("./data/pretraining")
-MODEL_SAVE_PATH = Path("./data/vocab/fast_tokenizer.json")
+MODEL_SAVE_PATH = Path("./data/vocab/tokenizer_vocab.json")
 MODEL_SAVE_PATH.parent.mkdir(exist_ok=True, parents=True) # create if does not exist
 
 FILE_EXT = ".parquet"
