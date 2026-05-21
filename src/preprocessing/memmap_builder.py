@@ -19,8 +19,9 @@ PRETRAINING_DIR = Path("./data/pretraining")
 FILE_EXT = ".parquet"
 
 # special tokens
-BOS_ID = 5
-EOT_ID = 0
+tokenizer = Tokenizer.from_file(VOCAB_PATH)
+BOS_ID = tokenizer.token_to_id("<|bos|>")
+EOT_ID = tokenizer.token_to_id("<|endoftext|>")
 
 # logging
 _logger = get_logger("memmap")
@@ -34,7 +35,7 @@ def _iter_all_documents(directory: Path):
                 for batch in pf.iter_batches(columns=["text"]):
                     yield from batch.column("text").to_pylist()
 
-def process(text: str, tokenizer: Tokenizer):
+def process(text: str):
     ids = tokenizer.encode(text).ids
     ids = [BOS_ID] + tokenizer.encode(text).ids + [EOT_ID]
     out = {"ids": ids, "len": len(ids)}
@@ -45,9 +46,9 @@ def process(text: str, tokenizer: Tokenizer):
 def main():
     _logger.info("** Initiating MemMap Builder 1st Pass - Counting Total Tokens **")
     total_tok = 0
-    tokenizer = Tokenizer.from_file(VOCAB_PATH)
+
     for text in _iter_all_documents(PRETRAINING_DIR):
-        out = process(text, tokenizer)
+        out = process(text)
         total_tok += out["len"]
 
     _logger.info("="*60)
@@ -56,7 +57,6 @@ def main():
     _logger.info("="*60)
     _logger.info("** Initiating MemMap Builder 2nd Pass - Creating MemMap File **")
 
-    
 
 
 if __name__ == "__main__":
