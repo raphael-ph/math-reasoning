@@ -10,4 +10,4 @@ train-tokenizer:
 	uv run -m src.preprocessing.hf_tokenizer
 
 scrape-datasets:
-	uv run src/preprocessing/scrape_datasets.py --output_dir ./data/pretraining --max_tokens 12_000_000_000
+	uv run -m src.preprocessing.scrape_datasets --output_dir ./data/pretraining --max_tokens 12_000_000_000
