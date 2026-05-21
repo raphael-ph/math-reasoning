@@ -48,6 +48,9 @@ from datasets import load_dataset
 from huggingface_hub import snapshot_download
 from tqdm import tqdm
 
+# internal imports
+from ..utils.logger import get_logger
+
 
 # ---------------------------------------------------------------------------
 # Config
@@ -76,6 +79,8 @@ LATEX_MATH_RE = re.compile(
     re.IGNORECASE,
 )
 LATEX_MIN_HITS = 10
+
+_logger = get_logger("scrape")
 
 
 # ---------------------------------------------------------------------------
@@ -162,7 +167,7 @@ class ShardWriter:
     def _flush(self):
         path = self.output_dir / f"{self.prefix}_shard_{self.shard_idx:04d}.parquet"
         pq.write_table(pa.table({"text": self.buffer}), path, compression="snappy")
-        print(f"    Flushed shard {self.shard_idx:04d} "
+        _logger.info(f"    Flushed shard {self.shard_idx:04d} "
               f"({len(self.buffer):,} records) → {path.name}")
         self.buffer.clear()
         self.shard_idx += 1
@@ -228,7 +233,7 @@ def parallel_s3_fetch(
 
 def download_metadata(repo_id: str, patterns: list[str], local_dir: Path) -> Path:
     """Download only the metadata parquet files from a HuggingFace dataset."""
-    print(f"  Downloading metadata from {repo_id} ...")
+    _logger.info(f"  Downloading metadata from {repo_id} ...")
     path = snapshot_download(
         repo_id=repo_id,
         repo_type="dataset",
@@ -243,9 +248,9 @@ def load_parquet_metadata(meta_dir: Path, pattern: str) -> pd.DataFrame:
     files = sorted(meta_dir.rglob(pattern))
     if not files:
         raise FileNotFoundError(f"No parquet files found matching {pattern} in {meta_dir}")
-    print(f"  Loading {len(files)} parquet file(s) ...")
+    _logger.info(f"  Loading {len(files)} parquet file(s) ...")
     df = pd.concat([pd.read_parquet(f) for f in files], ignore_index=True)
-    print(f"  Total rows: {len(df):,}")
+    _logger.info(f"  Total rows: {len(df):,}")
     return df
 
 
@@ -273,14 +278,14 @@ def scrape_s3_dataset(
             "sympy_count": 0, "skipped": 0, "completed": False}
 
     if ckpt.get("completed", False):
-        print(f"  Already completed ({ckpt['total_tokens']/1e6:.0f}M tokens) — skipping.")
+        _logger.info(f"  Already completed ({ckpt['total_tokens']/1e6:.0f}M tokens) — skipping.")
         return ckpt["total_tokens"]
 
     # Download metadata parquet if not already present
     if not meta_dir.exists() or not any(meta_dir.rglob("*.parquet")):
         download_metadata(repo_id, meta_patterns, meta_dir)
     else:
-        print(f"  Metadata already downloaded at {meta_dir}")
+        _logger.info(f"  Metadata already downloaded at {meta_dir}")
 
     df = load_parquet_metadata(meta_dir, meta_parquet_glob)
 
@@ -289,7 +294,7 @@ def scrape_s3_dataset(
     skipped      = ckpt["skipped"]
 
     if resume and start_idx > 0:
-        print(f"  Resuming from doc {start_idx:,} / {len(df):,}")
+        _logger.info(f"  Resuming from doc {start_idx:,} / {len(df):,}")
 
     writer  = ShardWriter(dataset_dir, name, ckpt["shard_idx"], ckpt["total_tokens"])
     clients = make_s3_clients(S3_WORKERS)
@@ -357,14 +362,14 @@ def scrape_s3_dataset(
         "completed":    True,
     })
 
-    print(f"  Done. {total_tokens/1e6:.0f}M tokens | "
+    _logger.info(f"  Done. {total_tokens/1e6:.0f}M tokens | "
           f"SymPy: {sympy_count} | Skipped: {skipped}")
 
     # Clean up metadata — no longer needed once shards are written
     if meta_dir.exists():
         import shutil
         shutil.rmtree(meta_dir)
-        print(f"  Cleaned up metadata dir: {meta_dir}")
+        _logger.info(f"  Cleaned up metadata dir: {meta_dir}")
 
     return total_tokens
 
@@ -374,10 +379,10 @@ def scrape_s3_dataset(
 # ---------------------------------------------------------------------------
 
 def scrape_python_edu(output_dir: Path, token_budget: int, resume: bool) -> int:
-    print("\n" + "=" * 60)
-    print("[1/4] Python-Edu  (HuggingFaceTB/smollm-corpus)")
-    print(f"      Budget: {token_budget/1e9:.2f}B tokens")
-    print("=" * 60)
+    _logger.info("\n" + "=" * 60)
+    _logger.info("[1/4] Python-Edu  (HuggingFaceTB/smollm-corpus)")
+    _logger.info(f"      Budget: {token_budget/1e9:.2f}B tokens")
+    _logger.info("=" * 60)
     return scrape_s3_dataset(
         name          = "python_edu",
         output_dir    = output_dir,
@@ -398,10 +403,10 @@ def _is_python(text: str) -> bool:
 
 
 def scrape_stack_edu(output_dir: Path, token_budget: int, resume: bool) -> int:
-    print("\n" + "=" * 60)
-    print("[2/4] Stack-Edu Python  (HuggingFaceTB/stack-edu)")
-    print(f"      Budget: {token_budget/1e9:.2f}B tokens")
-    print("=" * 60)
+    _logger.info("\n" + "=" * 60)
+    _logger.info("[2/4] Stack-Edu Python  (HuggingFaceTB/stack-edu)")
+    _logger.info(f"      Budget: {token_budget/1e9:.2f}B tokens")
+    _logger.info("=" * 60)
     return scrape_s3_dataset(
         name          = "stack_edu",
         output_dir    = output_dir,
@@ -419,10 +424,10 @@ def scrape_stack_edu(output_dir: Path, token_budget: int, resume: bool) -> int:
 # ---------------------------------------------------------------------------
 
 def scrape_algebraic_stack(output_dir: Path, token_budget: int, resume: bool) -> int:
-    print("\n" + "=" * 60)
-    print("[3/4] Algebraic-Stack Python  (EleutherAI/proof-pile-2)")
-    print(f"      Budget: {token_budget/1e9:.2f}B tokens")
-    print("=" * 60)
+    _logger.info("\n" + "=" * 60)
+    _logger.info("[3/4] Algebraic-Stack Python  (EleutherAI/proof-pile-2)")
+    _logger.info(f"      Budget: {token_budget/1e9:.2f}B tokens")
+    _logger.info("=" * 60)
 
     dataset_dir = output_dir / "algebraic_stack"
     dataset_dir.mkdir(parents=True, exist_ok=True)
@@ -433,7 +438,7 @@ def scrape_algebraic_stack(output_dir: Path, token_budget: int, resume: bool) ->
             "completed": False}
 
     if ckpt.get("completed", False):
-        print(f"  Already completed ({ckpt['total_tokens']/1e6:.0f}M tokens) — skipping.")
+        _logger.info(f"  Already completed ({ckpt['total_tokens']/1e6:.0f}M tokens) — skipping.")
         return ckpt["total_tokens"]
 
     skip_n        = ckpt["last_idx"]
@@ -442,7 +447,7 @@ def scrape_algebraic_stack(output_dir: Path, token_budget: int, resume: bool) ->
     skipped_empty = ckpt.get("skipped_empty", 0)
 
     if resume and skip_n > 0:
-        print(f"  Resuming from doc {skip_n:,}")
+        _logger.info(f"  Resuming from doc {skip_n:,}")
 
     writer = ShardWriter(dataset_dir, "algebraic_stack",
                          ckpt["shard_idx"], ckpt["total_tokens"])
@@ -512,7 +517,7 @@ def scrape_algebraic_stack(output_dir: Path, token_budget: int, resume: bool) ->
         "skipped_empty": skipped_empty,
         "completed":     True,
     })
-    print(f"  Done. {total_tokens/1e6:.0f}M tokens | SymPy: {sympy_count} "
+    _logger.info(f"  Done. {total_tokens/1e6:.0f}M tokens | SymPy: {sympy_count} "
           f"| Skipped lang: {skipped_lang} | Skipped empty: {skipped_empty}")
     return total_tokens
 
@@ -522,10 +527,10 @@ def scrape_algebraic_stack(output_dir: Path, token_budget: int, resume: bool) ->
 # ---------------------------------------------------------------------------
 
 def scrape_arxiv_math(output_dir: Path, token_budget: int, resume: bool) -> int:
-    print("\n" + "=" * 60)
-    print("[4/4] Arxiv Math  (EleutherAI/proof-pile-2, arxiv subset)")
-    print(f"      Budget: {token_budget/1e9:.2f}B tokens")
-    print("=" * 60)
+    _logger.info("\n" + "=" * 60)
+    _logger.info("[4/4] Arxiv Math  (EleutherAI/proof-pile-2, arxiv subset)")
+    _logger.info(f"      Budget: {token_budget/1e9:.2f}B tokens")
+    _logger.info("=" * 60)
 
     dataset_dir = output_dir / "arxiv_math"
     dataset_dir.mkdir(parents=True, exist_ok=True)
@@ -535,7 +540,7 @@ def scrape_arxiv_math(output_dir: Path, token_budget: int, resume: bool) -> int:
             "skipped_not_math": 0, "skipped_empty": 0, "completed": False}
 
     if ckpt.get("completed", False):
-        print(f"  Already completed ({ckpt['total_tokens']/1e6:.0f}M tokens) — skipping.")
+        _logger.info(f"  Already completed ({ckpt['total_tokens']/1e6:.0f}M tokens) — skipping.")
         return ckpt["total_tokens"]
 
     skip_n           = ckpt["last_idx"]
@@ -543,7 +548,7 @@ def scrape_arxiv_math(output_dir: Path, token_budget: int, resume: bool) -> int:
     skipped_empty    = ckpt.get("skipped_empty", 0)
 
     if resume and skip_n > 0:
-        print(f"  Resuming from doc {skip_n:,}")
+        _logger.info(f"  Resuming from doc {skip_n:,}")
 
     writer = ShardWriter(dataset_dir, "arxiv_math",
                          ckpt["shard_idx"], ckpt["total_tokens"])
@@ -598,7 +603,7 @@ def scrape_arxiv_math(output_dir: Path, token_budget: int, resume: bool) -> int:
         "skipped_empty":    skipped_empty,
         "completed":        True,
     })
-    print(f"  Done. {total_tokens/1e6:.0f}M tokens "
+    _logger.info(f"  Done. {total_tokens/1e6:.0f}M tokens "
           f"| Skipped (not math): {skipped_not_math} "
           f"| Skipped (empty): {skipped_empty}")
     return total_tokens
@@ -639,18 +644,18 @@ def main():
         for name in to_run
     }
 
-    print("\n" + "=" * 60)
-    print("Pre-training Data Scraper — Math Formalizer")
-    print("=" * 60)
-    print(f"Output dir      : {output_dir}")
-    print(f"Total budget    : {args.max_tokens/1e9:.1f}B tokens")
-    print(f"Datasets        : {', '.join(to_run)}")
-    print(f"Resume          : {args.resume}")
-    print(f"SymPy boost     : {SYMPY_SOFT_BOOST}")
-    print(f"S3 workers      : {S3_WORKERS}  |  Batch: {S3_BATCH_SIZE}")
-    print(f"Checkpoint every: {CHECKPOINT_EVERY:,} docs")
+    _logger.info("\n" + "=" * 60)
+    _logger.info("Pre-training Data Scraper — Math Formalizer")
+    _logger.info("=" * 60)
+    _logger.info(f"Output dir      : {output_dir}")
+    _logger.info(f"Total budget    : {args.max_tokens/1e9:.1f}B tokens")
+    _logger.info(f"Datasets        : {', '.join(to_run)}")
+    _logger.info(f"Resume          : {args.resume}")
+    _logger.info(f"SymPy boost     : {SYMPY_SOFT_BOOST}")
+    _logger.info(f"S3 workers      : {S3_WORKERS}  |  Batch: {S3_BATCH_SIZE}")
+    _logger.info(f"Checkpoint every: {CHECKPOINT_EVERY:,} docs")
     for name in to_run:
-        print(f"  {name:<25} {budgets[name]/1e9:.2f}B  "
+        _logger.info(f"  {name:<25} {budgets[name]/1e9:.2f}B  "
               f"({BUDGET_PROPORTIONS[name]*100:.0f}%)")
 
     manifest = load_manifest(output_dir)
@@ -662,20 +667,20 @@ def main():
         manifest["datasets"][name] = {"tokens_approx": tokens}
         save_manifest(output_dir, manifest)
 
-    print("\n" + "=" * 60)
-    print("SCRAPING COMPLETE — Summary")
-    print("=" * 60)
+    _logger.info("\n" + "=" * 60)
+    _logger.info("SCRAPING COMPLETE — Summary")
+    _logger.info("=" * 60)
     grand_total = sum(totals.values())
     for name, tokens in totals.items():
         pct = (tokens / grand_total * 100) if grand_total > 0 else 0
-        print(f"  {name:<25} {tokens/1e6:.0f}M  ({pct:.1f}%)")
-    print(f"  {'TOTAL':<25} {grand_total/1e9:.2f}B tokens")
-    print("=" * 60)
+        _logger.info(f"  {name:<25} {tokens/1e6:.0f}M  ({pct:.1f}%)")
+    _logger.info(f"  {'TOTAL':<25} {grand_total/1e9:.2f}B tokens")
+    _logger.info("=" * 60)
 
     manifest["total_tokens_approx"] = grand_total
     manifest["output_dir"]          = str(output_dir)
     save_manifest(output_dir, manifest)
-    print(f"\nManifest → {output_dir / 'manifest.json'}")
+    _logger.info(f"\nManifest → {output_dir / 'manifest.json'}")
 
 
 if __name__ == "__main__":
