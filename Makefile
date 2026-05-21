@@ -8,3 +8,6 @@ test:
 
 train-tokenizer:
 	uv run -m src.preprocessing.hf_tokenizer
+
+scrape-datasets:
+	uv run -m src.preprocessing.scrape_datasets
