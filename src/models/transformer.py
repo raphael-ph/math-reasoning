@@ -207,7 +207,6 @@ class Transformer(nn.Module):
         self.context_size = context_size
         self.head_size = emb_dim // n_heads
         self.embeddings = nn.Embedding(vocab_size, emb_dim)
-        self.pos_encoding = nn.Embedding(self.context_size, emb_dim)
         self.blocks = nn.Sequential(*[Block(n_heads, emb_dim, context_size) for _ in range(n_layers)])
         self.layer_norm = nn.LayerNorm(emb_dim)
         self.linear = nn.Linear(emb_dim, vocab_size)
