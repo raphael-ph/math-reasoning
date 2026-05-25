@@ -44,8 +44,6 @@ class MLP(nn.Module):
             layers.append(nn.Dropout(dropout))
         
         self.model = nn.Sequential(*layers)
-        total_params = sum(param.numel() for param in self.model.parameters())
-        _logger.debug(f"Total MLP size: {total_params}")
     
     def forward(self, x):
         y = self.model(x)
