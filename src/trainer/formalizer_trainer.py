@@ -3,6 +3,9 @@
 # checkpoints, best model, etc. This will rely havily on MLflow SDK: https://mlflow.org/docs/latest/ml/deep-learning/pytorch/
 
 import time
+import json
+import mmap
+import numpy as np
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -12,10 +15,10 @@ import mlflow
 from mlflow.models import infer_signature
 
 # internal methods
-from .base import BaseTrainer
-from ..utils.logger import get_logger
-from ..preprocessing.hf_tokenizer import Tokenizer
-from ..preprocessing.fim import apply_line_level_fim
+from src.trainer.base import BaseTrainer
+from src.utils.logger import get_logger
+from src.preprocessing.hf_tokenizer import Tokenizer
+from src.preprocessing.fim import apply_line_level_fim
 
 # torch imports
 import torch
@@ -25,37 +28,37 @@ from torch.utils.data import Dataset, DataLoader
 _logger = get_logger("formalizer_training", level="DEBUG")
 
 class FormalizerDataset(Dataset):
-    def __init__(self, corpus_path: Path, tokenizer: Tokenizer, context_size: int):
+    def __init__(self, corpus_path: Path, chunk_indices_path: Path, tokenizer: Tokenizer, context_size: int):
         super().__init__()
         self.context_size = context_size
         self.tokenizer = tokenizer
-        with open(corpus_path, "r", encoding="utf-8") as f:
-            raw_content = f.read()
+        self.corpus = np.memmap(corpus_path, dtype=np.uint16, mode='r')
 
-        # We simply load the samples in the initialization of the Dataset. All the tokenization and 
+        # We simply load the samples in the initialization of the Dataset.
         # FIM strategy application will be done in the __getitem__ method, on the fly. Specially for the FIM strategy
         # this is good because we ensure the model sees different configurations of PSM during training.
-        self.samples = raw_content.split("<|endoftext|>") # use the special EOT token to split each sample from the corpus
-        self.samples = [s.strip() for s in self.samples if s.strip()] # filter empty strings
+        self.indices = np.load(chunk_indices_path)
 
-        _logger.info(f"Loaded {len(self.samples)} documents.")
+        _logger.info(f"Loaded {len(self.indices)/1e6:.02f}M chunks.")
 
     def __len__(self):
-        return len(self.samples)
+        return len(self.indices)
 
     def __getitem__(self, index):
-        # Get the raw text for this specific document
-        text = self.samples[index]
+        # First we have to get the chunk. We'll select a chunk and get it from the corpus file
+        ix = self.indices[index]
+        start = ix * self.context_size
+        tokens = self.corpus[start:start+self.context_size+1]
+        
+        text = self.tokenizer.decode(tokens.tolist())
         
         # Apply Dynamic FIM
         fim_text = apply_line_level_fim(text)
         encodings = self.tokenizer.encode(
-            fim_text, 
-            max_length=self.context_size + 1, 
-            truncation=True, 
-            padding="max_length"
+            fim_text,
         )
-        full_tensor = torch.tensor(encodings.ids, dtype=torch.long)
+        ids = encodings.ids[:self.context_size + 1] # truncating
+        full_tensor = torch.tensor(ids, dtype=torch.long)
         input_ids = full_tensor[:-1]  # 0 to N-1
         target_ids = full_tensor[1:]  # 1 to N
         
