@@ -129,7 +129,7 @@ class FormalizerTrainer(BaseTrainer):
 
                     xb, yb = xb.to(self.config.device), yb.to(self.config.device)
                     
-                    # Evaluation & Logging Loop
+                    # Evaluation & Logging Loop 
                     if i % self.config.eval_interval == 0 and i > 0:
                         losses = self._estimate_loss()
                         
@@ -164,8 +164,9 @@ class FormalizerTrainer(BaseTrainer):
                             best_val_loss = losses["val_loss"]
                             torch.save(self.model.state_dict(), best_model_path)  # fast local save
                             _logger.info(f"New best model (val_loss: {best_val_loss:.4f})")
-
-                    logits, loss = self.model(xb, yb)
+                    with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                        logits, loss = self.model(xb, yb)
+                        
                     if i > 0 and i % checkpoint_interval == 0:
                         _logger.info(f"Saving checkpoint at step {i}")
                         checkpoint_model_path = final_model_path.parent / f"checkpoint_{i}.pt"
@@ -198,7 +199,8 @@ class FormalizerTrainer(BaseTrainer):
                     X, Y = next(loader_iter)
                 
                 X, Y = X.to(self.config.device), Y.to(self.config.device)
-                _, loss = self.model(X, Y)
+                with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                    _, loss = self.model(X, Y)
                 losses[k] = loss.item()
             
             mean_loss = losses.mean()
