@@ -5,6 +5,7 @@ from tokenizers import Tokenizer
 from src.models.transformer import Transformer
 from src.trainer.base import BaseTrainerConfig
 from src.trainer.formalizer_trainer import FormalizerDataset, FormalizerTrainer
+from src.utils.logger import get_logger
 
 # --- CONFIGURATION AND GLOBAL VARIABLES ---
 # Paths
@@ -23,6 +24,7 @@ with open(VOCAB_METADATA_PATH, "rb") as file:
 VOCAB_SIZE = vocab_config["vocab_size"]
 CONTEXT_SIZE = vocab_config["context_size"]
 tokenizer = Tokenizer.from_file(TOKENIZER_PATH)
+logger = get_logger("trainer")
 # -------------------------------------------------
 
 config = BaseTrainerConfig(
@@ -32,8 +34,8 @@ config = BaseTrainerConfig(
     eval_iters=50,
     eval_interval=1000,
     checkpoint_interval=5000,
-    batch_size=48,
-    n_embeddings=1024,
+    batch_size=32,
+    n_embeddings=1280,
     n_heads=16,
     n_layer=24,
     learning_rate=3e-4,
@@ -60,6 +62,9 @@ model = Transformer(vocab_size=config.vocab_size,
                     context_size=config.context_size,
                     n_heads=config.n_heads,
                     n_layers=config.n_layer)
+
+total = sum(p.numel() for p in model.parameters())
+logger.info(f"Total parameters: {total/1e6:.1f}M")
 
 trainer = FormalizerTrainer(model=model,
                             train_dataset=train_ds,
