@@ -35,6 +35,9 @@ class BaseTrainerConfig(BaseModel):
     # hardware
     device: str = Field("cuda" if torch.cuda.is_available() else "cpu", description="Device to train on")
 
+    # paths
+    final_model_path: str = Field(..., description="Path for final trained model")
+
 class BaseTrainer(BaseModel):
     """Base Trainer class, implements the abstract methods for the trainers"""
     # necessary because the torch.nn.Module and torch.utils.data.Datasert are not a pydantic models

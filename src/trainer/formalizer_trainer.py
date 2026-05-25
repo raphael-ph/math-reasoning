@@ -104,9 +104,15 @@ class FormalizerTrainer(BaseTrainer):
             
             checkpoint_interval = getattr(self.config, "checkpoint_interval", 1000)
 
+            final_model_path = Path(self.config.final_model_path)
+            final_model_path.parent.mkdir(parents=True, exist_ok=True)
+            best_model_path = final_model_path.parent / "best_model.pt"
+
             _logger.info(f"Starting training on {self.config.device}...")
             mlflow.pytorch.autolog(log_models=False, silent=True)
-            
+
+            best_val_loss = float("inf")
+
             # --- TIMER START ---
             # We start the clock just before the loop begins
             start_time = time.time() 
@@ -154,23 +160,25 @@ class FormalizerTrainer(BaseTrainer):
                             "train_ppl": losses['train_ppl']
                         }, step=i)
 
+                        if losses["val_loss"] < best_val_loss:
+                            best_val_loss = losses["val_loss"]
+                            torch.save(self.model.state_dict(), best_model_path)  # fast local save
+                            _logger.info(f"New best model (val_loss: {best_val_loss:.4f})")
+
                     logits, loss = self.model(xb, yb)
                     if i > 0 and i % checkpoint_interval == 0:
                         _logger.info(f"Saving checkpoint at step {i}")
-                        signature = infer_signature(
-                            xb.cpu().numpy(), 
-                            logits.detach().cpu().numpy(),
-                        )
-                        mlflow.pytorch.log_model(
-                            pytorch_model=self.model,
-                            artifact_path=f"checkpoint_step_{i}",
-                            signature=signature,
-                            input_example=xb[:1].cpu().numpy() 
-                        )
+                        checkpoint_model_path = final_model_path.parent / f"checkpoint_{i}.pt"
+                        torch.save(self.model.state_dict(), checkpoint_model_path)
 
                     optimizer.zero_grad(set_to_none=True)
                     loss.backward()
                     optimizer.step()
+                
+                # saving model 
+                _logger.info(f"Training complete, saving final model")
+                torch.save(self.model.state_dict(), final_model_path)
+                mlflow.log_metric("best_val_loss", best_val_loss)
 
     @torch.no_grad()
     def _estimate_loss(self):
