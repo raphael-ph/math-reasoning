@@ -57,7 +57,13 @@ class FormalizerDataset(Dataset):
         encodings = self.tokenizer.encode(
             fim_text,
         )
-        ids = encodings.ids[:self.context_size + 1] # truncating
+        ids = encodings.ids[:self.context_size + 1]
+
+        # pad if shorter than context_size + 1
+        pad_id = self.tokenizer.token_to_id("<|pad|>")
+        if len(ids) < self.context_size + 1:
+            ids = ids + [pad_id] * (self.context_size + 1 - len(ids))
+
         full_tensor = torch.tensor(ids, dtype=torch.long)
         input_ids = full_tensor[:-1]  # 0 to N-1
         target_ids = full_tensor[1:]  # 1 to N
@@ -70,6 +76,7 @@ class FormalizerTrainer(BaseTrainer):
 
     def model_post_init(self, __context):
         self.model.to(self.config.device)
+        self.model = torch.compile(self.model)
 
     def _setup_dataloaders(self):
         self._train_dataloader = DataLoader(
@@ -92,7 +99,7 @@ class FormalizerTrainer(BaseTrainer):
             optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.config.learning_rate)
             train_iter = iter(self._train_dataloader)
             
-            mlflow.set_tracking_uri("file:./mlruns")
+            mlflow.set_tracking_uri("sqlite:///mlruns.db")
             mlflow.set_experiment("Formalizer_Training")
             
             checkpoint_interval = getattr(self.config, "checkpoint_interval", 1000)
@@ -147,11 +154,12 @@ class FormalizerTrainer(BaseTrainer):
                             "train_ppl": losses['train_ppl']
                         }, step=i)
 
+                    logits, loss = self.model(xb, yb)
                     if i > 0 and i % checkpoint_interval == 0:
                         _logger.info(f"Saving checkpoint at step {i}")
                         signature = infer_signature(
                             xb.cpu().numpy(), 
-                            self.model(xb, yb)[0].detach().cpu().numpy()
+                            logits.detach().cpu().numpy(),
                         )
                         mlflow.pytorch.log_model(
                             pytorch_model=self.model,
@@ -160,7 +168,6 @@ class FormalizerTrainer(BaseTrainer):
                             input_example=xb[:1].cpu().numpy() 
                         )
 
-                    logits, loss = self.model(xb, yb)
                     optimizer.zero_grad(set_to_none=True)
                     loss.backward()
                     optimizer.step()
