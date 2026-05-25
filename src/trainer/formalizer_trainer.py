@@ -75,7 +75,7 @@ class FormalizerTrainer(BaseTrainer):
         self._train_dataloader = DataLoader(
             dataset=self.train_dataset,
             batch_size=self.config.batch_size,
-            shuffle=True,
+            shuffle=False, # Already shuffled
             num_workers=4,
             pin_memory=True
         )
