@@ -14,3 +14,10 @@ scrape-datasets:
 
 run-memmap:
 	uv run -m src.preprocessing.memmap_builder
+
+# --- Training Formalizer ---
+run-formalizer-training:
+	uv run -m scripts.train_formalizer
+
+mlflow-ui:
+	mlflow ui --backend-store-uri sqlite:///mlruns.db --port 5000
