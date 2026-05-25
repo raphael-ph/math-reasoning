@@ -76,7 +76,7 @@ class FormalizerTrainer(BaseTrainer):
 
     def model_post_init(self, __context):
         self.model.to(self.config.device)
-        self.model = torch.compile(self.model)
+        # self.model = torch.compile(self.model)
 
     def _setup_dataloaders(self):
         self._train_dataloader = DataLoader(
@@ -166,7 +166,7 @@ class FormalizerTrainer(BaseTrainer):
                             _logger.info(f"New best model (val_loss: {best_val_loss:.4f})")
                     with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                         logits, loss = self.model(xb, yb)
-                        
+
                     if i > 0 and i % checkpoint_interval == 0:
                         _logger.info(f"Saving checkpoint at step {i}")
                         checkpoint_model_path = final_model_path.parent / f"checkpoint_{i}.pt"
