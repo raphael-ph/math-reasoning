@@ -31,11 +31,14 @@ class AttentionHead(nn.Module):
         self.v = nn.Linear(emb_dim, head_size, bias=False)
         self.dropout = nn.Dropout(dropout)
 
-        
-        self.register_buffer(
-            'tril',
-            torch.tril(torch.ones(self.block_size,self.block_size))
-        )
+        cos, sin = self.precompute_freqs_cis(context_size)
+        self.register_buffer("cos", cos)
+        self.register_buffer("sin", sin)
+
+        # self.register_buffer(
+        #     'tril',
+        #     torch.tril(torch.ones(self.block_size,self.block_size))
+        # )
     
     # --- Rotary Position Embedding (RoPE) ---
     # The RoPE implementation follow the original paper from 2023 (https://arxiv.org/pdf/2104.09864),
@@ -99,8 +102,8 @@ class AttentionHead(nn.Module):
 
     def rope(self, q, k, cos, sin):
         """Apply rope to Query and Key values"""
-        cos = cos.unsqueeze(0)
-        sin = sin.unsqueeze(0)
+        cos = cos.unsqueeze(0).to(q.dtype)
+        sin = sin.unsqueeze(0).to(q.dtype)
         q_emb = (q * cos) + (self._rotate_half(q) * sin)
         k_emb = (k * cos) + (self._rotate_half(k) * sin)
 
@@ -117,35 +120,41 @@ class AttentionHead(nn.Module):
         # Key, Query first go through a Linear transformation. 
         K = self.k(x) # (B, T, C) -> batch, context window, channels (embeddings)
         Q = self.q(x)
+        V = self.v(x)
 
         # As per the original paper, authors propose that RoPE is added directly at the attention head:
         # >>> "Since RoPE injects position information by rotation, which keeps the norm of hidden representations unchanged, 
         # >>> we can combine RoPE with linear attention by multiplying the rotation matrix with the outputs of the non-negative functions.""
-        cos, sin = self.precompute_freqs_cis(T)
-        Q, K = self.rope(Q, K, cos, sin)
+        Q, K = self.rope(Q, K, self.cos, self.sin)
 
-        # Matmul(Q, K) = weights and Scale(weights)
-        # following the paper implementation, after the Matmul, the weights
-        # are scaled, dividing by sqrt(d_keys).
-        wei = Q @ K.transpose(-2, -1) * C**-0.5 # (B, T, C) @ (B, C, T) -> (B, T, T)
+        # # Matmul(Q, K) = weights and Scale(weights)
+        # # following the paper implementation, after the Matmul, the weights
+        # # are scaled, dividing by sqrt(d_keys).
+        # wei = Q @ K.transpose(-2, -1) * C**-0.5 # (B, T, C) @ (B, C, T) -> (B, T, T)
 
-        # Masking(weights)
-        # Since this implementation is for the decoder, it is necessary to apply the 
-        # masking on the "future" information, which means the tokens that are still to come.
-        # Karpathy's implementation uses the torch.register_buffer() function.
-        wei = wei.masked_fill(self.tril[:T, :T] == 0, float("-inf"))
+        # # Masking(weights)
+        # # Since this implementation is for the decoder, it is necessary to apply the 
+        # # masking on the "future" information, which means the tokens that are still to come.
+        # # Karpathy's implementation uses the torch.register_buffer() function.
+        # tril = torch.tril(torch.ones(T, T, device=x.device))
+        # wei = wei.masked_fill(tril == 0, float("-inf"))
 
-        # Softmax(weights)
-        wei = F.softmax(wei, -1) # apply softmax to the Channel dim, so we get the probs for the embeddings
+        # # Softmax(weights)
+        # wei = F.softmax(wei, -1) # apply softmax to the Channel dim, so we get the probs for the embeddings
 
-        # Adding a dropout after computing the Softmax;
-        # This simulates that we destroy some tracks of communication, forcing the network to learn
-        # more robust representations.
-        wei = self.dropout(wei)
+        # # Adding a dropout after computing the Softmax;
+        # # This simulates that we destroy some tracks of communication, forcing the network to learn
+        # # more robust representations.
+        # wei = self.dropout(wei)
 
-        # Matmul(weights, V)
-        V = self.v(x) # (B, T, C)
-        out = wei @ V # (B, T, T) @ (B, T, C) -> (B, T, C)
+        # # Matmul(weights, V)
+        # V = self.v(x) # (B, T, C)
+        # out = wei @ V # (B, T, T) @ (B, T, C) -> (B, T, C)
+        out = F.scaled_dot_product_attention(
+            Q, K, V,
+            is_causal=True,
+            dropout_p=self.dropout.p
+        )
 
         return out
 
@@ -194,8 +203,12 @@ class Block(nn.Module):
     
     def forward(self, x):
         # adding the skip connections
-        x = x + self.self_attention(self.layer_norm1(x))
-        x = x + self.ffwd(self.layer_norm2(x))
+        x = x + torch.utils.checkpoint.checkpoint(
+            self.self_attention, self.layer_norm1(x), use_reentrant=False
+        )
+        x = x + torch.utils.checkpoint.checkpoint(
+            self.ffwd, self.layer_norm2(x), use_reentrant=False
+        )
 
         return x
 
