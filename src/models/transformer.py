@@ -125,7 +125,7 @@ class AttentionHead(nn.Module):
         # As per the original paper, authors propose that RoPE is added directly at the attention head:
         # >>> "Since RoPE injects position information by rotation, which keeps the norm of hidden representations unchanged, 
         # >>> we can combine RoPE with linear attention by multiplying the rotation matrix with the outputs of the non-negative functions.""
-        Q, K = self.rope(Q, K, self.cos, self.sin)
+        Q, K = self.rope(Q, K, self.cos[:T], self.sin[:T])
 
         # # Matmul(Q, K) = weights and Scale(weights)
         # # following the paper implementation, after the Matmul, the weights
