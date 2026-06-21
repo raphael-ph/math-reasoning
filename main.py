@@ -13,7 +13,7 @@ with open(VOCAB_METADATA_PATH, "rb") as file:
 CONTEXT_SIZE = vocab_config["context_size"]
 VOCAB_SIZE = vocab_config["vocab_size"]
 # ---------------------
-model_path = Path("models/formalizer/best_model.pt")
+model_path = Path("models/formalizer/best_model_v0.pt")
 vocab_size=VOCAB_SIZE
 context_size=CONTEXT_SIZE
 n_embeddings=768
