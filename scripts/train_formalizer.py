@@ -39,6 +39,7 @@ config = BaseTrainerConfig(
     n_heads=12,
     n_layer=12,
     learning_rate=3e-4,
+    warmup_steps=2000,
     device="cuda",
     final_model_path=FINAL_MODEL_PATH,
 )

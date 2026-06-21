@@ -26,7 +26,7 @@ class BaseTrainerConfig(BaseModel):
     eval_iters: int = Field(..., description="Max number of eval steps")
     batch_size: int = Field(..., description="Batch size for the training job")
     checkpoint_interval: int = Field(..., description="Save checkpoint every N steps")
-
+    warmup_steps: int = Field(..., description="Steps used for warmup fo neural net")
 
     # model training hyperparameters
     n_embeddings: int = Field(..., description="Embedding size")

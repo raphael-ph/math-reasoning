@@ -23,6 +23,7 @@ from src.preprocessing.fim import apply_line_level_fim
 # torch imports
 import torch
 from torch.utils.data import Dataset, DataLoader
+from torch.optim.lr_scheduler import LambdaLR
 
 # setting up the logging
 _logger = get_logger("formalizer_training", level="DEBUG")
@@ -94,9 +95,32 @@ class FormalizerTrainer(BaseTrainer):
             pin_memory=True
         )
 
+    def lr_lambda(self, current_step: int):
+        # linear warmup
+        if current_step < self.config.warmup_steps:
+            return float(current_step) / float(max(1, self.config.warmup_steps))
+        
+        # 2. Cosine Decay Phase
+        # Calculate how far along we are between the end of warmup and max_steps
+        progress = float(current_step - self.config.warmup_steps) / float(max(1, self.config.max_iters - self.config.warmup_steps))
+        
+        # Clip progress at 1.0 just in case the loop goes slightly over max_iters
+        progress = min(1.0, progress)
+        
+        cosine_decay = 0.5 * (1.0 + np.cos(np.pi * progress))
+        
+        # Establish a floor so the learning rate doesn't completely drop to 0
+        # 0.1 means it decays down to 10% of 3e-4 (which is 3e-5)
+        return max(0.1, cosine_decay)
+
     def train(self):
             self._setup_dataloaders()
-            optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.config.learning_rate)
+            optimizer = torch.optim.AdamW(self.model.parameters(), 
+                                          lr=self.config.learning_rate, 
+                                          betas=(0.9, 0.95), # deepseek values
+                                          weight_decay=0.1,  # deepseek values 
+                                          )
+            lr_scheduler = LambdaLR(optimizer=optimizer, lr_lambda=self.lr_lambda)
             train_iter = iter(self._train_dataloader)
             
             mlflow.set_tracking_uri("sqlite:///mlruns.db")
@@ -130,21 +154,26 @@ class FormalizerTrainer(BaseTrainer):
                     xb, yb = xb.to(self.config.device), yb.to(self.config.device)
                     
                     # Evaluation & Logging Loop 
-                    if i % self.config.eval_interval == 0 and i > 0:
+                    if (i == 0) or (i % self.config.eval_interval == 0 and i > 0):
                         losses = self._estimate_loss()
                         
                         # --- ETA CALCULATION ---
-                        current_time = time.time()
-                        elapsed_seconds = current_time - start_time
-                        # Avoid division by zero
-                        avg_time_per_step = elapsed_seconds / i 
-                        remaining_steps = self.config.max_iters - i
-                        eta_seconds = remaining_steps * avg_time_per_step
-                        
-                        # Formatting nicely as HH:MM:SS
-                        eta_str = str(timedelta(seconds=int(eta_seconds)))
+                        if i > 0:
+                            current_time = time.time()
+                            elapsed_seconds = current_time - start_time
+                            # Avoid division by zero
+                            avg_time_per_step = elapsed_seconds / i 
+                            remaining_steps = self.config.max_iters - i
+                            eta_seconds = remaining_steps * avg_time_per_step
+                            
+                            # Formatting nicely as HH:MM:SS
+                            eta_str = str(timedelta(seconds=int(eta_seconds)))
+                        else:
+                            eta_str = "Calculating..."
+
                         elapsed_str = str(timedelta(seconds=int(elapsed_seconds)))
-                        
+                        current_lr = optimizer.param_groups[0]['lr']
+
                         # Log to Console with ETA
                         _logger.info(
                             f"Step {i}/{self.config.max_iters} | "
@@ -154,6 +183,7 @@ class FormalizerTrainer(BaseTrainer):
                         )
                         
                         mlflow.log_metrics({
+                            "learning_rate": current_lr,
                             "val_loss": losses['val_loss'], 
                             "train_loss": losses['train_loss'],
                             "val_ppl": losses['val_ppl'],
@@ -174,7 +204,11 @@ class FormalizerTrainer(BaseTrainer):
 
                     optimizer.zero_grad(set_to_none=True)
                     loss.backward()
+
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+
                     optimizer.step()
+                    lr_scheduler.step()
                 
                 # saving model 
                 _logger.info(f"Training complete, saving final model")
