@@ -158,9 +158,9 @@ class FormalizerTrainer(BaseTrainer):
                         losses = self._estimate_loss()
                         
                         # --- ETA CALCULATION ---
+                        current_time = time.time()
+                        elapsed_seconds = current_time - start_time
                         if i > 0:
-                            current_time = time.time()
-                            elapsed_seconds = current_time - start_time
                             # Avoid division by zero
                             avg_time_per_step = elapsed_seconds / i 
                             remaining_steps = self.config.max_iters - i
