@@ -124,8 +124,11 @@ class FormalizerTrainer(BaseTrainer):
         if optimizer_state_dict is not None:
             optimizer.load_state_dict(optimizer_state_dict)
 
-        # last_epoch=start_step-1 so the first step() call lands on start_step,
-        # giving the correct LR for a resumed run without needing to save scheduler state.
+        # When last_epoch >= 0 (resume), PyTorch requires initial_lr to already exist
+        # in param groups — it's normally set during a fresh init (last_epoch=-1).
+        if start_step > 0:
+            for group in optimizer.param_groups:
+                group.setdefault('initial_lr', group['lr'])
         lr_scheduler = LambdaLR(optimizer=optimizer, lr_lambda=self.lr_lambda, last_epoch=start_step - 1)
 
         train_iter = iter(self._train_dataloader)
