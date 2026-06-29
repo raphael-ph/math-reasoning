@@ -263,12 +263,35 @@ class FormalizerTrainer(BaseTrainer):
             optimizer_state_dict=optimizer_state,
         )
 
+    def resume_from_state_dict(self, checkpoint_path: Path, run_id: str, step: int) -> None:
+        """Resume training from a local .pt checkpoint file.
+
+        Handles both plain state dicts (torch.save(model.state_dict(), path)) and
+        our full checkpoint format (dict with model_state_dict / optimizer_state_dict keys).
+
+        Example:
+            trainer.resume_from_state_dict(Path("models/formalizer/checkpoint_455000.pt"), run_id="abc123", step=455000)
+        """
+        _logger.info(f"Loading state dict from {checkpoint_path}")
+        state = torch.load(checkpoint_path, map_location=self.config.device, weights_only=False)
+
+        if isinstance(state, dict) and "model_state_dict" in state:
+            self.model.load_state_dict(state["model_state_dict"])
+            optimizer_state = state.get("optimizer_state_dict")
+        else:
+            self.model.load_state_dict(state)
+            optimizer_state = None
+
+        self.model.to(self.config.device)
+        _logger.info(f"Model loaded. Resuming training from step {step}, MLflow run {run_id}")
+        self.train(start_step=step, resume_run_id=run_id, optimizer_state_dict=optimizer_state)
+
     def resume_from_mlflow_artifact(self, run_id: str, step: int) -> None:
         """Resume training from a checkpoint logged as an MLflow artifact.
 
-        Use this when local .pt files are unavailable (e.g. the run crashed on a remote
-        machine but the artifact was already uploaded). Optimizer state is not available
-        from MLflow artifacts, so AdamW momentum terms will be cold-started at this step.
+        Use this when the checkpoint was uploaded to MLflow (not saved locally).
+        Optimizer state is not available from MLflow artifacts, so AdamW momentum
+        terms will be cold-started at this step.
 
         Example:
             trainer.resume_from_mlflow_artifact(run_id="abc123", step=455000)

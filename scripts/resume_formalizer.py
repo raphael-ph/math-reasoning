@@ -77,7 +77,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--step", type=int, required=True, help="Checkpoint step to resume from")
     parser.add_argument("--run", type=str, required=True, help="MLflow run ID to resume")
+    parser.add_argument("--path", type=str, default=None, help="Explicit checkpoint path (defaults to models/formalizer/checkpoint_{step}.pt)")
     args = parser.parse_args()
 
-    logger.info(f"Resuming from MLflow artifact — run={args.run}, step={args.step}")
-    trainer.resume_from_mlflow_artifact(run_id=args.run, step=args.step)
+    from pathlib import Path
+    checkpoint_path = Path(args.path) if args.path else Path(f"models/formalizer/checkpoint_{args.step}.pt")
+    logger.info(f"Resuming from {checkpoint_path} — run={args.run}, step={args.step}")
+    trainer.resume_from_state_dict(checkpoint_path=checkpoint_path, run_id=args.run, step=args.step)
