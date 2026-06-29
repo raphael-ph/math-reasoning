@@ -273,6 +273,8 @@ class FormalizerTrainer(BaseTrainer):
         Example:
             trainer.resume_from_mlflow_artifact(run_id="abc123", step=455000)
         """
+        mlflow.set_tracking_uri("sqlite:///mlruns.db")
+
         artifact_uri = f"runs:/{run_id}/checkpoint_step_{step}"
         _logger.info(f"Loading model from MLflow artifact: {artifact_uri}")
 
