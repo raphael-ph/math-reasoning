@@ -10,7 +10,7 @@ endif
 ifndef RUN
 	$(error RUN is required. Usage: make resume-training STEP=455000 RUN=<mlflow-run-id>)
 endif
-	uv run -m src.trainer.resume_formalizer_training_job --step $(STEP) --run $(RUN)
+	uv run -m scripts.resume_formalizer --step $(STEP) --run $(RUN)
 
 test:
 	pytest tests --verbose
