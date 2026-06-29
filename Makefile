@@ -10,7 +10,7 @@ endif
 ifndef RUN
 	$(error RUN is required. Usage: make resume-training STEP=455000 RUN=<mlflow-run-id>)
 endif
-	uv run -m scripts.resume_formalizer --step $(STEP) --run $(RUN)
+	PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True uv run -m scripts.resume_formalizer --step $(STEP) --run $(RUN)
 
 test:
 	pytest tests --verbose

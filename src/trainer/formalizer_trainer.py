@@ -289,6 +289,7 @@ class FormalizerTrainer(BaseTrainer):
             optimizer_state = None
 
         self.model.to(self.config.device)
+        torch.cuda.empty_cache()
         _logger.info(f"Model loaded. Resuming training from step {step}, MLflow run {run_id}")
         self.train(start_step=step, resume_run_id=run_id, optimizer_state_dict=optimizer_state)
 
