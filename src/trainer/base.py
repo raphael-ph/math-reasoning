@@ -25,6 +25,8 @@ class BaseTrainerConfig(BaseModel):
     eval_interval: int = Field(...,  description="Interval for making a run of evaluation")
     eval_iters: int = Field(..., description="Max number of eval steps")
     batch_size: int = Field(..., description="Batch size for the training job")
+    checkpoint_interval: int = Field(..., description="Save checkpoint every N steps")
+    warmup_steps: int = Field(..., description="Steps used for warmup fo neural net")
 
     # model training hyperparameters
     n_embeddings: int = Field(..., description="Embedding size")
@@ -34,6 +36,9 @@ class BaseTrainerConfig(BaseModel):
 
     # hardware
     device: str = Field("cuda" if torch.cuda.is_available() else "cpu", description="Device to train on")
+
+    # paths
+    final_model_path: str = Field(..., description="Path for final trained model")
 
 class BaseTrainer(BaseModel):
     """Base Trainer class, implements the abstract methods for the trainers"""

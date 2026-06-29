@@ -1,46 +1,34 @@
-# internal imports
-from src.utils.logger import get_logger
-from src.preprocessing.hf_tokenizer import train_fast_tokenizer
-from src.preprocessing.loader import RepoLoader, HuggingFaceLoader, CorpusBlender
-from src.utils.runner import train_tokenizer_remote
+import json
+from pathlib import Path
+from src.models.transformer import Transformer
+from src.inference.formalizer_engine import FormalizerInference
 
-logger = get_logger("main", level="INFO")
+# --- CONFIGURATION ----
+## Paths
+VOCAB_METADATA_PATH = "./data/corpus/metadata.json"
+## Vars
+with open(VOCAB_METADATA_PATH, "rb") as file:
+    f = file.read()
+    vocab_config = json.loads(f)
+CONTEXT_SIZE = vocab_config["context_size"]
+VOCAB_SIZE = vocab_config["vocab_size"]
+# ---------------------
+model_path = Path("models/formalizer/best_model_v0.pt")
+vocab_size=VOCAB_SIZE
+context_size=CONTEXT_SIZE
+n_embeddings=768
+n_heads=12
+n_layer=12
 
-def generate_corpus():
-    # Configuration
-    LEAN_OUTPUT = "data/raw/corpus_lean_raw.txt"
-    NL_OUTPUT = "data/raw/corpus_english_raw.txt"
-    FINAL_OUTPUT = "data/corpus/final_training_corpus.txt"
-    
-    # Extract Lean (Code)
-    # Using the RepoLoader you wrote
-    lean_loader = RepoLoader(
-        repo_url="https://github.com/leanprover-community/mathlib4.git",
-        clone_dir="temp_mathlib_clone",
-        output_file=LEAN_OUTPUT,
-        delete_after=True
-    )
-    lean_loader.run()
-    
-    # Extract Proof-Pile (English/Latex)
-    # Using 'hoskinson-center/proof-pile' (a standard large math corpus)
-    nl_loader = HuggingFaceLoader(
-        dataset_name="hoskinson-center/proof-pile", 
-        split="train", 
-        output_file=NL_OUTPUT,
-        max_samples=30_000 # Adjust this to match size of Lean corpus approx
-    )
-    nl_loader.run()
-    
-    # Mix them (Bilingual Data)
-    blender = CorpusBlender(
-        file_a=LEAN_OUTPUT,
-        file_b=NL_OUTPUT,
-        output_file=FINAL_OUTPUT
-    )
-    blender.run()
-    
-    logger.info("\nREADY FOR TOKENIZER TRAINING!")
+model = Transformer(vocab_size=vocab_size, 
+            emb_dim=n_embeddings, 
+            context_size=context_size,
+            n_heads=n_heads,
+            n_layers=n_layer
+        )
+
+formalizer = FormalizerInference(model_path=model_path, model=model)
 
 if __name__ == "__main__":
-    train_fast_tokenizer()
+    input_text = "Create a function that sums two numbers."
+    print(formalizer.run(input_text))

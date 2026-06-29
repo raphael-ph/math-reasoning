@@ -18,16 +18,96 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 # --- Attention Head ---
 class AttentionHead(nn.Module):
     """Single head of Attention"""
-    def __init__(self, emb_dim: int, head_size: int, dropout: float = 0.2):
+    def __init__(self, emb_dim: int, head_size: int, context_size: int, dropout: float = 0.2):
         super().__init__()
         # The authors use a fixed d_model = 512. That is our "head_size"
         # This is a fixed dim throughout the whole attention module. As per the paper:
         # >>> "To facilitate these residual connections, all sub-layers in the model, \
         # >>> as well as the embedding layers, produce outputs of dimension d_model = 512."
+        self.head_size = head_size
+        self.block_size = context_size
         self.k = nn.Linear(emb_dim, head_size, bias=False)
         self.q = nn.Linear(emb_dim, head_size, bias=False)
         self.v = nn.Linear(emb_dim, head_size, bias=False)
         self.dropout = nn.Dropout(dropout)
+
+        cos, sin = self.precompute_freqs_cis(context_size)
+        self.register_buffer("cos", cos)
+        self.register_buffer("sin", sin)
+
+        # self.register_buffer(
+        #     'tril',
+        #     torch.tril(torch.ones(self.block_size,self.block_size))
+        # )
+    
+    # --- Rotary Position Embedding (RoPE) ---
+    # The RoPE implementation follow the original paper from 2023 (https://arxiv.org/pdf/2104.09864),
+    # where authors propose the RoFormer. The main intuition behind RoPE is that you rotate each token
+    # based on it's relative position. As the authors propose, when compared to the original implementation 
+    # in "Attention is All you Need" paper, we move from the additive implementation to a multiplicative one. 
+    # This ensures that the norm of the embedding remains the same, and position is encoded through rotation.
+    def precompute_freqs_cis(self, T, theta: int=10000):
+        """Implements the Rotary Position Embedding (RoPE)
+        For this specific implementation of RoPE, I followed the instructions 
+        presented in this video: http://youtube.com/watch?v=V8r__fXx7tU
+
+        There is actually a twist in this implementation when compared to the video: Hugging Face transformers
+        has a different perspective on calculating RoPE. It precomputes the Rotation Matrix during initialization
+        and apply it on the forward pass.
+        
+        Args:
+            T: temporal component (sequence length)
+            theta: this is a hyperparameter. In both implementations, Vaswani et al. [2017] and
+            RoPE, authors use it as 10000. Theta controls how fast the pairs of tokens will rotate. A bigger theta
+            makes it rotate slower, a smaller theta, make them rotate faster.
+        """
+        # assert that the Embedding Dimension is divisible by two. The original implementation extrapolates
+        # the 2D case for rotation and actually rotates each component of the embedding in blocks of 2. They
+        # do not add much of an explanation, nor does the video. The video explains the Reasons for this, not 
+        # the intuition:
+        # 1. Efficient & fast 
+        # 2. Parameter free (in 3D there a much more ways you can rotate something and you can actually "learn" this as well)
+        # 3. Interpretable
+        # 4. Tests made, trying to learn hiugher order rotation, does not bring any gains.
+        assert self.head_size % 2 == 0
+
+        # For the actual implementation, what we are going to do here is: We'll use the angular frequency formula 
+        # in order to calculate HOW MUCH each term must rotate. Formula is given by: w_k = 1/theta^{2k/d}, where 
+        # - w_k is the angular frequency
+        # - d is the head_size
+        # - k is the index of the pair we are selecting, where k in [0, d/2-1]
+        freqs = 1 / (theta**(torch.arange(0, self.head_size, 2, dtype=torch.float32, device=DEVICE) / self.head_size)) # (d/2)
+
+        # calculating the actual rotation for each position. Equivalent to m x \theta
+        t = torch.arange(0, T, device=DEVICE)                   # (T)
+        freqs = torch.outer(t, freqs)                           # (T, d/2) 
+        freqs_cis = torch.repeat_interleave(freqs, 2, dim=-1)   # (T, d)
+
+        # defining the rotation matrix
+        cos = torch.cos(freqs_cis)  # (T, d)
+        sin = torch.sin(freqs_cis)  # (T, d)
+
+        return cos, sin
+     
+    def _rotate_half(self, x):
+        """Implementing the computational efficient realization of rotary matrix multiplication
+
+        This shows on original paper (https://arxiv.org/pdf/2104.09864), section 3.4.2
+        """
+        x1 = x[..., 0::2] # Even Indices          (B, T, C/2)
+        x2 = x[..., 1::2] # Odd indices           (B, T, C/2)
+        out = torch.stack([-x2, x1], dim=-1)    # (B, T, C/2, 2)
+
+        return out.flatten(-2)                  # (B, T, C)
+
+    def rope(self, q, k, cos, sin):
+        """Apply rope to Query and Key values"""
+        cos = cos.unsqueeze(0).to(q.dtype)
+        sin = sin.unsqueeze(0).to(q.dtype)
+        q_emb = (q * cos) + (self._rotate_half(q) * sin)
+        k_emb = (k * cos) + (self._rotate_half(k) * sin)
+
+        return q_emb, k_emb
 
     def forward(self, x):
         """Implementation of the forward pass of the Attention Head
@@ -40,39 +120,49 @@ class AttentionHead(nn.Module):
         # Key, Query first go through a Linear transformation. 
         K = self.k(x) # (B, T, C) -> batch, context window, channels (embeddings)
         Q = self.q(x)
+        V = self.v(x)
 
-        # Matmul(Q, K) = weights and Scale(weights)
-        # following the paper implementation, after the Matmul, the weights
-        # are scaled, dividing by sqrt(d_keys).
-        wei = Q @ K.transpose(-2, -1) * C**-0.5 # (B, T, C) @ (B, C, T) -> (B, T, T)
+        # As per the original paper, authors propose that RoPE is added directly at the attention head:
+        # >>> "Since RoPE injects position information by rotation, which keeps the norm of hidden representations unchanged, 
+        # >>> we can combine RoPE with linear attention by multiplying the rotation matrix with the outputs of the non-negative functions.""
+        Q, K = self.rope(Q, K, self.cos[:T], self.sin[:T])
 
-        # Masking(weights)
-        # Since this implementation is for the decoder, it is necessary to apply the 
-        # masking on the "future" information, which means the tokens that are still to come.
-        # Karpathy's implementation uses the torch.register_buffer() function.
-        # TO DO: Explore which are the pros and cons of my current implementation
-        tril = torch.ones(T, T).tril()
-        wei = wei.masked_fill(tril == 0, float("-inf"))
+        # # Matmul(Q, K) = weights and Scale(weights)
+        # # following the paper implementation, after the Matmul, the weights
+        # # are scaled, dividing by sqrt(d_keys).
+        # wei = Q @ K.transpose(-2, -1) * C**-0.5 # (B, T, C) @ (B, C, T) -> (B, T, T)
 
-        # Softmax(weights)
-        wei = F.softmax(wei, -1) # apply softmax to the Channel dim, so we get the probs for the embeddings
+        # # Masking(weights)
+        # # Since this implementation is for the decoder, it is necessary to apply the 
+        # # masking on the "future" information, which means the tokens that are still to come.
+        # # Karpathy's implementation uses the torch.register_buffer() function.
+        # tril = torch.tril(torch.ones(T, T, device=x.device))
+        # wei = wei.masked_fill(tril == 0, float("-inf"))
 
-        # Adding a dropout after computing the Softmax;
-        # This simulates that we destroy some tracks of communication, forcing the network to learn
-        # more robust representations.
-        wei = self.dropout(wei)
+        # # Softmax(weights)
+        # wei = F.softmax(wei, -1) # apply softmax to the Channel dim, so we get the probs for the embeddings
 
-        # Matmul(weights, V)
-        V = self.v(x) # (B, T, C)
-        out = wei @ V # (B, T, T) @ (B, T, C) -> (B, T, C)
+        # # Adding a dropout after computing the Softmax;
+        # # This simulates that we destroy some tracks of communication, forcing the network to learn
+        # # more robust representations.
+        # wei = self.dropout(wei)
+
+        # # Matmul(weights, V)
+        # V = self.v(x) # (B, T, C)
+        # out = wei @ V # (B, T, T) @ (B, T, C) -> (B, T, C)
+        out = F.scaled_dot_product_attention(
+            Q, K, V,
+            is_causal=True,
+            dropout_p=self.dropout.p
+        )
 
         return out
 
 # --- Multi-Head Attention ---
 class MultiHeadAttention(nn.Module):
-    def __init__(self, n_heads: int, emb_dim: int, head_size: int, dropout: float = 0.2):
+    def __init__(self, n_heads: int, emb_dim: int, head_size: int, context_size: int, dropout: float = 0.2):
         super().__init__()
-        self.heads = nn.ModuleList([AttentionHead(emb_dim, head_size) for _ in range(n_heads)])
+        self.heads = nn.ModuleList([AttentionHead(emb_dim, head_size, context_size) for _ in range(n_heads)])
         self.linear = nn.Linear(emb_dim, emb_dim)
         self.dropout = nn.Dropout(dropout)
 
@@ -94,7 +184,7 @@ class MultiHeadAttention(nn.Module):
 
 # --- Transformer Block ---
 class Block(nn.Module):
-    def __init__(self, n_heads: int, emb_dim: int):
+    def __init__(self, n_heads: int, emb_dim: int, context_size: int):
         """Implementation of the Transformer block. 
         
         Inspired by Karpathy, this implementation does not have the "second" multi-head attention
@@ -104,7 +194,7 @@ class Block(nn.Module):
         head_size = emb_dim//n_heads
 
         # "core" of the transformer
-        self.self_attention = MultiHeadAttention(n_heads, emb_dim, head_size)
+        self.self_attention = MultiHeadAttention(n_heads, emb_dim, head_size, context_size)
         self.ffwd = MLP(in_dim=emb_dim, out_dim=emb_dim, hidden_dim=4*emb_dim, hidden_layers=1) # simpe ffwd net
 
         # normalization
@@ -113,8 +203,12 @@ class Block(nn.Module):
     
     def forward(self, x):
         # adding the skip connections
-        x = x + self.self_attention(self.layer_norm1(x))
-        x = x + self.ffwd(self.layer_norm2(x))
+        x = x + torch.utils.checkpoint.checkpoint(
+            self.self_attention, self.layer_norm1(x), use_reentrant=False
+        )
+        x = x + torch.utils.checkpoint.checkpoint(
+            self.ffwd, self.layer_norm2(x), use_reentrant=False
+        )
 
         return x
 
@@ -124,10 +218,9 @@ class Transformer(nn.Module):
         super().__init__()
         # variables
         self.context_size = context_size
-
+        self.head_size = emb_dim // n_heads
         self.embeddings = nn.Embedding(vocab_size, emb_dim)
-        self.pos_encoding = nn.Embedding(self.context_size, emb_dim)
-        self.blocks = nn.Sequential(*[Block(n_heads, emb_dim) for _ in range(n_layers)])
+        self.blocks = nn.Sequential(*[Block(n_heads, emb_dim, context_size) for _ in range(n_layers)])
         self.layer_norm = nn.LayerNorm(emb_dim)
         self.linear = nn.Linear(emb_dim, vocab_size)
     
@@ -146,9 +239,14 @@ class Transformer(nn.Module):
         # >>> we must inject some information about the relative or absolute position of the tokens in the sequence.""
         #
         # In the paper, the authors use a Sine function to represent the positional encoding.
-        # TO DO: implement Sine PE
-        positional_encoding = self.pos_encoding(torch.arange(T, device=DEVICE)) # (B, T) -> (B, T, C) adds embeddings for the position
-        x = token_embeddings + positional_encoding
+        # ==== UPDATE ====
+        # The original implementation uses Sine. As per 2021 and beyond, the industry pattern is using RoPE, which is implemented directly in the attention
+        # head. I left my legacy implementation here as a legacy demonstration of what I did before RoPE. The legacy implementation followed
+        # Karpathy's video.
+        # 
+        # positional_encoding = self.pos_encoding(torch.arange(T, device=DEVICE)) # (B, T) -> (B, T, C) adds embeddings for the position
+        # x = token_embeddings + positional_encoding
+        x = token_embeddings
         x = self.blocks(x)
         x = self.layer_norm(x)
         logits = self.linear(x) # (B, T, C) -> (B, T, vocab_size)
@@ -156,7 +254,7 @@ class Transformer(nn.Module):
         # This logic allows us to use the forward pass for training and for generating:
         # if targets are provided, the model will be trained. If targets are not passed, the model simply outputs
         # the logits, which are then used on softmax.
-        if not targets:
+        if targets is None:
             loss = None
         else:
             B, T, C = logits.shape

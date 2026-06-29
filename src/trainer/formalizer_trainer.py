@@ -3,6 +3,9 @@
 # checkpoints, best model, etc. This will rely havily on MLflow SDK: https://mlflow.org/docs/latest/ml/deep-learning/pytorch/
 
 import time
+import json
+import mmap
+import numpy as np
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -12,67 +15,75 @@ import mlflow
 from mlflow.models import infer_signature
 
 # internal methods
-from .base import BaseTrainer
-from ..utils.logger import get_logger
-from ..preprocessing.hf_tokenizer import Tokenizer
-from ..preprocessing.fim import apply_line_level_fim
+from src.trainer.base import BaseTrainer
+from src.utils.logger import get_logger
+from src.preprocessing.hf_tokenizer import Tokenizer
+from src.preprocessing.fim import apply_line_level_fim
 
 # torch imports
 import torch
 from torch.utils.data import Dataset, DataLoader
+from torch.optim.lr_scheduler import LambdaLR
 
 # setting up the logging
 _logger = get_logger("formalizer_training", level="DEBUG")
 
 class FormalizerDataset(Dataset):
-    def __init__(self, corpus_path: Path, tokenizer: Tokenizer, context_size: int):
+    def __init__(self, corpus_path: Path, chunk_indices_path: Path, tokenizer: Tokenizer, context_size: int):
         super().__init__()
         self.context_size = context_size
         self.tokenizer = tokenizer
-        with open(corpus_path, "r", encoding="utf-8") as f:
-            raw_content = f.read()
+        self.corpus = np.memmap(corpus_path, dtype=np.uint16, mode='r')
 
-        # We simply load the samples in the initialization of the Dataset. All the tokenization and 
+        # We simply load the samples in the initialization of the Dataset.
         # FIM strategy application will be done in the __getitem__ method, on the fly. Specially for the FIM strategy
         # this is good because we ensure the model sees different configurations of PSM during training.
-        self.samples = raw_content.split("<|endoftext|>") # use the special EOT token to split each sample from the corpus
-        self.samples = [s.strip() for s in self.samples if s.strip()] # filter empty strings
+        self.indices = np.load(chunk_indices_path)
 
-        _logger.info(f"Loaded {len(self.samples)} documents.")
+        _logger.info(f"Loaded {len(self.indices)/1e6:.02f}M chunks.")
 
     def __len__(self):
-        return len(self.samples)
+        return len(self.indices)
 
     def __getitem__(self, index):
-        # Get the raw text for this specific document
-        text = self.samples[index]
-        
+        # First we have to get the chunk. We'll select a chunk and get it from the corpus file
+        ix = self.indices[index]
+        start = ix * self.context_size
+        tokens = self.corpus[start:start+self.context_size+1]
+
+        text = self.tokenizer.decode(tokens.tolist())
+
         # Apply Dynamic FIM
         fim_text = apply_line_level_fim(text)
         encodings = self.tokenizer.encode(
-            fim_text, 
-            max_length=self.context_size + 1, 
-            truncation=True, 
-            padding="max_length"
+            fim_text,
         )
-        full_tensor = torch.tensor(encodings.ids, dtype=torch.long)
+        ids = encodings.ids[:self.context_size + 1]
+
+        # pad if shorter than context_size + 1
+        pad_id = self.tokenizer.token_to_id("<|pad|>")
+        if len(ids) < self.context_size + 1:
+            ids = ids + [pad_id] * (self.context_size + 1 - len(ids))
+
+        full_tensor = torch.tensor(ids, dtype=torch.long)
         input_ids = full_tensor[:-1]  # 0 to N-1
         target_ids = full_tensor[1:]  # 1 to N
-        
+
         return input_ids, target_ids
-    
+
 class FormalizerTrainer(BaseTrainer):
     _train_dataloader: Optional[DataLoader] = None
     _val_dataloader: Optional[DataLoader] = None
 
     def model_post_init(self, __context):
         self.model.to(self.config.device)
+        # self.model = torch.compile(self.model)
 
     def _setup_dataloaders(self):
         self._train_dataloader = DataLoader(
             dataset=self.train_dataset,
             batch_size=self.config.batch_size,
-            shuffle=True,
+            shuffle=False, # Already shuffled
             num_workers=4,
             pin_memory=True
         )
@@ -84,6 +95,19 @@ class FormalizerTrainer(BaseTrainer):
             pin_memory=True
         )
 
+    def lr_lambda(self, current_step: int):
+        # linear warmup
+        if current_step < self.config.warmup_steps:
+            return float(current_step) / float(max(1, self.config.warmup_steps))
+
+        # Cosine Decay Phase
+        progress = float(current_step - self.config.warmup_steps) / float(max(1, self.config.max_iters - self.config.warmup_steps))
+        progress = min(1.0, progress)
+        cosine_decay = 0.5 * (1.0 + np.cos(np.pi * progress))
+
+        # Floor so LR doesn't drop to 0 — decays to 10% of base LR
+        return max(0.1, cosine_decay)
+
     def train(
         self,
         start_step: int = 0,
@@ -91,22 +115,37 @@ class FormalizerTrainer(BaseTrainer):
         optimizer_state_dict: Optional[dict] = None,
     ):
         self._setup_dataloaders()
-        optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.config.learning_rate)
+        optimizer = torch.optim.AdamW(
+            self.model.parameters(),
+            lr=self.config.learning_rate,
+            betas=(0.9, 0.95),  # deepseek values
+            weight_decay=0.1,   # deepseek values
+        )
         if optimizer_state_dict is not None:
             optimizer.load_state_dict(optimizer_state_dict)
 
+        # last_epoch=start_step-1 so the first step() call lands on start_step,
+        # giving the correct LR for a resumed run without needing to save scheduler state.
+        lr_scheduler = LambdaLR(optimizer=optimizer, lr_lambda=self.lr_lambda, last_epoch=start_step - 1)
+
         train_iter = iter(self._train_dataloader)
 
-        mlflow.set_tracking_uri("file:./mlruns")
+        mlflow.set_tracking_uri("sqlite:///mlruns.db")
         mlflow.set_experiment("Formalizer_Training")
 
         checkpoint_interval = getattr(self.config, "checkpoint_interval", 1000)
         checkpoint_dir = Path("models/formalizer")
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
+        final_model_path = Path(self.config.final_model_path)
+        final_model_path.parent.mkdir(parents=True, exist_ok=True)
+        best_model_path = checkpoint_dir / "best_model.pt"
+
         _logger.info(f"Starting training on {self.config.device} from step {start_step}...")
         mlflow.pytorch.autolog(log_models=False, silent=True)
 
+        best_val_loss = float("inf")
+        device_type = self.config.device.split(":")[0]
         start_time = time.time()
 
         with mlflow.start_run(run_id=resume_run_id) as run:
@@ -125,10 +164,10 @@ class FormalizerTrainer(BaseTrainer):
                 xb, yb = xb.to(self.config.device), yb.to(self.config.device)
 
                 # Evaluation & Logging Loop
-                if i % self.config.eval_interval == 0 and i > start_step:
+                is_eval_step = (i == 0 and start_step == 0) or (i % self.config.eval_interval == 0 and i > start_step)
+                if is_eval_step:
                     losses = self._estimate_loss()
 
-                    # ETA is relative to this session's start, not total training time
                     current_time = time.time()
                     elapsed_seconds = current_time - start_time
                     steps_done = i - start_step
@@ -138,6 +177,7 @@ class FormalizerTrainer(BaseTrainer):
 
                     eta_str = str(timedelta(seconds=int(eta_seconds)))
                     elapsed_str = str(timedelta(seconds=int(elapsed_seconds)))
+                    current_lr = optimizer.param_groups[0]['lr']
 
                     _logger.info(
                         f"Step {i}/{self.config.max_iters} | "
@@ -147,16 +187,21 @@ class FormalizerTrainer(BaseTrainer):
                     )
 
                     mlflow.log_metrics({
+                        "learning_rate": current_lr,
                         "val_loss": losses['val_loss'],
                         "train_loss": losses['train_loss'],
                         "val_ppl": losses['val_ppl'],
                         "train_ppl": losses['train_ppl']
                     }, step=i)
 
+                    if losses["val_loss"] < best_val_loss:
+                        best_val_loss = losses["val_loss"]
+                        torch.save(self.model.state_dict(), best_model_path)
+                        _logger.info(f"New best model (val_loss: {best_val_loss:.4f})")
+
                 if i > start_step and i % checkpoint_interval == 0:
                     _logger.info(f"Saving checkpoint at step {i}")
 
-                    # Local checkpoint: model + optimizer state + run_id for future resumption
                     checkpoint_path = checkpoint_dir / f"checkpoint_step_{i}.pt"
                     torch.save({
                         "step": i,
@@ -166,7 +211,6 @@ class FormalizerTrainer(BaseTrainer):
                     }, checkpoint_path)
                     _logger.info(f"Local checkpoint saved: {checkpoint_path}")
 
-                    # MLflow artifact checkpoint
                     signature = infer_signature(
                         xb.cpu().numpy(),
                         self.model(xb, yb)[0].detach().cpu().numpy()
@@ -178,10 +222,18 @@ class FormalizerTrainer(BaseTrainer):
                         input_example=xb[:1].cpu().numpy()
                     )
 
-                logits, loss = self.model(xb, yb)
+                with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
+                    _, loss = self.model(xb, yb)
+
                 optimizer.zero_grad(set_to_none=True)
                 loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
                 optimizer.step()
+                lr_scheduler.step()
+
+            _logger.info("Training complete, saving final model")
+            torch.save(self.model.state_dict(), final_model_path)
+            mlflow.log_metric("best_val_loss", best_val_loss)
 
     def resume_from_checkpoint(self, checkpoint_dir: Optional[Path] = None) -> None:
         """Find the latest local checkpoint in checkpoint_dir and resume training from it."""
@@ -236,30 +288,31 @@ class FormalizerTrainer(BaseTrainer):
         out = {}
         self.model.eval()
         loaders = {'train': self._train_dataloader, 'val': self._val_dataloader}
-        
+
         for split, loader in loaders.items():
             losses = torch.zeros(self.config.eval_iters)
             loader_iter = iter(loader)
-            
+
             for k in range(self.config.eval_iters):
                 try:
                     X, Y = next(loader_iter)
                 except StopIteration:
                     loader_iter = iter(loader)
                     X, Y = next(loader_iter)
-                
+
                 X, Y = X.to(self.config.device), Y.to(self.config.device)
-                _, loss = self.model(X, Y)
+                with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                    _, loss = self.model(X, Y)
                 losses[k] = loss.item()
-            
+
             mean_loss = losses.mean()
-            
+
             # Save Loss
             out[f"{split}_loss"] = mean_loss.item()
             # Calculate Perplexity (PPL)
             # Perplexity is given by 2^H. Since Pytorch's implementation uses ln instead of log,
             # it is necessary to adapt to torch.exp()
             out[f"{split}_ppl"] = torch.exp(mean_loss).item()
-            
+
         self.model.train()
         return out

@@ -14,3 +14,19 @@ endif
 
 test:
 	pytest tests --verbose
+
+train-tokenizer:
+	uv run -m src.preprocessing.hf_tokenizer
+
+scrape-datasets:
+	uv run -m src.preprocessing.scrape_datasets --output_dir ./data/pretraining --max_tokens 12_000_000_000
+
+run-memmap:
+	uv run -m src.preprocessing.memmap_builder
+
+# --- Training Formalizer ---
+run-formalizer-training:
+	uv run -m scripts.train_formalizer
+
+mlflow-ui:
+	mlflow ui --backend-store-uri sqlite:///mlruns.db --port 5000
