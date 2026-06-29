@@ -275,7 +275,7 @@ class FormalizerTrainer(BaseTrainer):
         """
         mlflow.set_tracking_uri("sqlite:///mlruns.db")
 
-        artifact_uri = f"runs:/{run_id}/checkpoint_step_{step}"
+        artifact_uri = f"runs:/{run_id}/checkpoint_{step}"
         _logger.info(f"Loading model from MLflow artifact: {artifact_uri}")
 
         loaded_model = mlflow.pytorch.load_model(artifact_uri, map_location=self.config.device)
