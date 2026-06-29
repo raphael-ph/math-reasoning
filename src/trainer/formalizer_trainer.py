@@ -126,9 +126,12 @@ class FormalizerTrainer(BaseTrainer):
 
         # When last_epoch >= 0 (resume), PyTorch requires initial_lr to already exist
         # in param groups — it's normally set during a fresh init (last_epoch=-1).
+        # Must use config base LR, not group['lr']: if an optimizer state dict was
+        # loaded, group['lr'] is the scaled LR at checkpoint time, which would cause
+        # LambdaLR to double-apply the schedule.
         if start_step > 0:
             for group in optimizer.param_groups:
-                group.setdefault('initial_lr', group['lr'])
+                group['initial_lr'] = self.config.learning_rate
         lr_scheduler = LambdaLR(optimizer=optimizer, lr_lambda=self.lr_lambda, last_epoch=start_step - 1)
 
         train_iter = iter(self._train_dataloader)
