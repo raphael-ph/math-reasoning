@@ -2,13 +2,14 @@ import argparse
 from pathlib import Path
 
 from src.models.transformer import Transformer
-from src.trainer.formalizer_trainer import FormalizerTrainer, BaseTrainerConfig, FormalizerDataset
+from src.trainer.base import BaseTrainerConfig
+from src.trainer.formalizer_trainer import FormalizerTrainer, FormalizerDataset
 from src.utils.logger import get_logger
 from tokenizers import Tokenizer as HFTokenizer
 
 logger = get_logger("formalizer_resume", level="DEBUG")
 
-TOKENIZER_PATH = "data/vocab/fast_tokenizer.json"
+TOKENIZER_PATH = "data/vocab/tokenizer_vocab.json"
 TRAIN_PATH = Path("data/corpus/train.txt")
 VAL_PATH = Path("data/corpus/val.txt")
 
