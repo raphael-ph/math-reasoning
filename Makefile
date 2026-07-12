@@ -24,6 +24,10 @@ scrape-datasets:
 run-memmap:
 	uv run -m src.preprocessing.memmap_builder
 
+# --- Post-training (SFT + GRPO) ---
+scrape-metamath-sympy:
+	uv run -m src.preprocessing.scrape_posttraining --output_dir ./data/posttraining/metamath_sympy
+
 # --- Training Formalizer ---
 run-formalizer-training:
 	uv run -m scripts.train_formalizer
