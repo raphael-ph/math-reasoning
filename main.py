@@ -13,10 +13,10 @@ with open(VOCAB_METADATA_PATH, "rb") as file:
 CONTEXT_SIZE = vocab_config["context_size"]
 VOCAB_SIZE = vocab_config["vocab_size"]
 # ---------------------
-model_path = Path("models/formalizer/best_model_v0.pt")
+model_path = Path("models/formalizer/best_model.pt")
 vocab_size=VOCAB_SIZE
 context_size=CONTEXT_SIZE
-n_embeddings=768
+n_embeddings=912
 n_heads=12
 n_layer=12
 
@@ -30,5 +30,8 @@ model = Transformer(vocab_size=vocab_size,
 formalizer = FormalizerInference(model_path=model_path, model=model)
 
 if __name__ == "__main__":
-    input_text = "Create a function that sums two numbers."
+    input_text = "import sympy"
+    print(60*"=")
+    print("TEST WITH NEWLY TRAINED MODEL")
+    print(60*"=")
     print(formalizer.run(input_text))
