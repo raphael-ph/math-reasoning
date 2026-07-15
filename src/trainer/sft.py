@@ -70,3 +70,32 @@ class SFTTrainer(BaseTrainer):
     """Implements the Supervised Fine-Tuning technique"""
 
 if __name__ == "__main__":
+    import json
+    # --- CONFIGURATION AND GLOBAL VARIABLES ---
+    # Paths
+    TOKENIZER_PATH = "data/vocab/tokenizer_vocab.json"
+    VOCAB_METADATA_PATH = "data/corpus/metadata.json"
+    CORPUS_PATH = "data/corpus/corpus.bin"
+    TRAIN_INDICES = "data/corpus/train_indices.npy"
+    VAL_INDICES = "data/corpus/val_indices.npy"
+    FINAL_MODEL_PATH = "models/formalizer/final_model.pt"
+
+    # ---------------- Global Vars --------------------
+    with open(VOCAB_METADATA_PATH, "rb") as file:
+        f = file.read()
+        vocab_config = json.loads(f)
+
+    VOCAB_SIZE = vocab_config["vocab_size"]
+    CONTEXT_SIZE = vocab_config["context_size"]
+    tokenizer = Tokenizer.from_file(TOKENIZER_PATH)
+    logger = get_logger("trainer")
+    # -------------------------------------------------
+    CORPUS_PATH = "data/posttraining/metamath_sympy"
+    dataset = SFTFormalizerDataset(CORPUS_PATH, tokenizer, CONTEXT_SIZE)
+
+    print(len(dataset))
+    input_ids, label_ids, code_out = dataset[0]
+
+    print(input_ids.tolist())
+    print(tokenizer.decode(label_ids.tolist()))
+    print(code_out)
