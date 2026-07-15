@@ -210,3 +210,5 @@ __marimo__/
 # Project specifics
 logs/
 data/
+mlruns*
+models/
