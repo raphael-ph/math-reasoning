@@ -133,7 +133,7 @@ class SFTTrainer(BaseTrainer):
         self._val_dataloader = DataLoader(
             dataset=self.val_dataset,
             batch_size=self.config.batch_size,
-            shuffle=False,
+            shuffle=False, # Already shuffled
             num_workers=4,
             pin_memory=True
         )
@@ -150,6 +150,9 @@ class SFTTrainer(BaseTrainer):
 
         # Floor so LR doesn't drop to 0 — decays to 10% of base LR
         return max(0.1, cosine_decay)
+
+    def train(self):
+
     
 
 if __name__ == "__main__":
