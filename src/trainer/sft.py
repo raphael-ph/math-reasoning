@@ -7,9 +7,12 @@
 
 # general imports
 import glob
+import numpy as np
+import pyarrow as pa
 from pathlib import Path
 import pyarrow.dataset as ds
-from typing import Tuple
+import pyarrow.compute as pc
+from typing import Tuple, Optional, Literal
 
 # torch imports
 import torch
@@ -26,9 +29,16 @@ from .base import BaseTrainer
 # set-up logging
 _logger = get_logger("formalizer_posttraining", level="DEBUG")
 
+SHUFFLING_SEED = 42
+
 class SFTFormalizerDataset(Dataset):
     """Implements the Dataset for supervised fine tuning"""
-    def __init__(self, corpus_path: Path, tokenizer: Tokenizer, context_size: int):
+    def __init__(self, corpus_path: Path, 
+                 tokenizer: Tokenizer, 
+                 context_size: int, 
+                 split: Literal["train", "val"],
+                 train_size: int = 15000, 
+                 val_size: int = 3000):
         super().__init__()
         self.tokenizer = tokenizer
         self.context_size = context_size
@@ -39,6 +49,34 @@ class SFTFormalizerDataset(Dataset):
         for f in file_list:
             _logger.debug(f)
         self.dataset = ds.dataset(file_list, format="parquet").to_table()
+
+        # shuffle dataset
+        indices = self.__shuffle_table(self.dataset)
+
+        train_indices = indices[:train_size]
+        val_indices = indices[train_size : train_size + val_size]
+
+        # save both indices to disk
+        output_path = Path("data/posttraining/metamath_sympy/sft")
+        output_path.mkdir(parents=True, exist_ok=True)
+
+        train_indices_path = Path(f"{output_path}/train_indices.npy")
+        val_indices_path = Path(f"{output_path}/val_indices.npy")
+
+        # Ensure paths are not overwritten
+        if not train_indices_path.exists():
+            np.save(train_indices_path, train_indices)
+
+        if not val_indices_path.exists():
+            np.save(val_indices_path, val_indices)
+
+        # return dataset
+        if split == "train":
+            idx = np.load("data/posttraining/metamath_sympy/sft/train_indices.npy")
+            self.dataset = pc.take(self.dataset, idx)
+        elif split == "val":
+            idx = np.load("data/posttraining/metamath_sympy/sft/val_indices.npy")
+            self.dataset = pc.take(self.dataset, idx)
     
     def __len__(self):
         return len(self.dataset)
@@ -64,6 +102,16 @@ class SFTFormalizerDataset(Dataset):
         label_ids = torch.tensor(sympy_ids, dtype=torch.long)
 
         return input_ids, label_ids, item["code_output"]
+
+    # --- Helper ---
+    def __shuffle_table(self, table: pa.Table) -> np.array:
+        """Shuffles the parquet table and returns the shuffled indices as np.arr"""
+        indices = np.array(range(table.num_rows))
+
+        random_generator = np.random.default_rng(seed=SHUFFLING_SEED)
+        random_generator.shuffle(indices)
+
+        return indices
 
 # --- SFTTrainer ---
 class SFTTrainer(BaseTrainer):
