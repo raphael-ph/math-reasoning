@@ -116,6 +116,41 @@ class SFTFormalizerDataset(Dataset):
 # --- SFTTrainer ---
 class SFTTrainer(BaseTrainer):
     """Implements the Supervised Fine-Tuning technique"""
+    _train_dataloader: Optional[DataLoader]
+    _val_dataloader: Optional[DataLoader]
+
+    def model_post_init(self, __context):
+        self.model.to(self.config.device)
+
+    def _setup_dataloaders(self):
+        self._train_dataloader = DataLoader(
+            dataset=self.train_dataset,
+            batch_size=self.config.batch_size,
+            shuffle=False, # Already shuffled
+            num_workers=4,
+            pin_memory=True
+        )
+        self._val_dataloader = DataLoader(
+            dataset=self.val_dataset,
+            batch_size=self.config.batch_size,
+            shuffle=False,
+            num_workers=4,
+            pin_memory=True
+        )
+
+    def lr_lambda(self, current_step: int):
+        # linear warmup
+        if current_step < self.config.warmup_steps:
+            return float(current_step) / float(max(1, self.config.warmup_steps))
+
+        # Cosine Decay Phase
+        progress = float(current_step - self.config.warmup_steps) / float(max(1, self.config.max_iters - self.config.warmup_steps))
+        progress = min(1.0, progress)
+        cosine_decay = 0.5 * (1.0 + np.cos(np.pi * progress))
+
+        # Floor so LR doesn't drop to 0 — decays to 10% of base LR
+        return max(0.1, cosine_decay)
+    
 
 if __name__ == "__main__":
     import json
