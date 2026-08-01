@@ -51,6 +51,9 @@ class SFTFormalizerDataset(Dataset):
         self.tokenizer = tokenizer
         self.context_size = context_size
 
+        # configuring the tokenizer truncation strategy
+        self.tokenizer.enable_truncation(max_length=self.context_size + 1, direction="left")
+
         # loading dataset
         file_list = glob.glob(f"{corpus_path}/*.parquet", recursive=True)
         _logger.debug("Parquet file list: ")
@@ -99,15 +102,17 @@ class SFTFormalizerDataset(Dataset):
 
         query_tokens = self.tokenizer.encode(item["query"])
         sympy_tokens = self.tokenizer.encode(item["sympy"])
+
+        # format the final input
+        input_query = f"<|bos|> <|user|> {item['query']} <|assistant|> {item['sympy']}" # EOT token is already appended in the dataset
+
+        encodings = self.tokenizer.encode(input_query)
+        ids = encodings.ids
         
         pad_id = self.tokenizer.token_to_id("<|pad|>")
-        query_ids = query_tokens.ids[:self.context_size - 1]
-        sympy_ids = sympy_tokens.ids
-        if len(query_ids) < self.context_size + 1:
-            query_ids = query_ids + [pad_id] * (self.context_size + 1 - len(query_ids))
+        if len(ids) < self.context_size + 1:
+            ids = ids + [pad_id] * (self.context_size + 1 - len(ids))
 
-        input_ids = torch.tensor(query_ids, dtype=torch.long)
-        label_ids = torch.tensor(sympy_ids, dtype=torch.long)
 
         return input_ids, label_ids, item["code_output"]
 
