@@ -61,6 +61,20 @@ class SFTFormalizerDataset(Dataset):
             _logger.debug(f)
         self.dataset = ds.dataset(file_list, format="parquet").to_table()
 
+        # drop rows whose completion alone (<|assistant|> + sympy) can't fit in the
+        # context window — left-truncation would otherwise cut away the <|assistant|>
+        # anchor itself, breaking the slice_anchor lookup in __getitem__
+        keep_mask = [
+            len(self.tokenizer.encode(f" <|assistant|> {sympy}").ids) < self.context_size + 1
+            for sympy in self.dataset["output"].to_pylist()
+        ]
+        dropped = len(keep_mask) - sum(keep_mask)
+        _logger.info(
+            f"Dropped {dropped}/{len(keep_mask)} rows whose completion alone "
+            f"exceeds context_size ({self.context_size})"
+        )
+        self.dataset = pc.filter(self.dataset, pa.array(keep_mask))
+
         # shuffle dataset
         indices = self.__shuffle_table(self.dataset)
 
