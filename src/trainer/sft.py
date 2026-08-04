@@ -441,6 +441,16 @@ if __name__ == "__main__":
     dataset = SFTFormalizerDataset(CORPUS_PATH, tokenizer, CONTEXT_SIZE, split="train")
 
     print(len(dataset))
+
+    # total token count for the train split (post-truncation, matches what training actually sees)
+    total_tokens = 0
+    for i in range(len(dataset)):
+        query = dataset.dataset["answer"][i].as_py()
+        sympy = dataset.dataset["output"][i].as_py()
+        text = f"<|bos|> <|user|> {query} <|assistant|> {sympy}"
+        total_tokens += len(tokenizer.encode(text).ids)
+    print(f"Total tokens in train split: {total_tokens:,}")
+
     input_ids, label_ids, code_out = dataset[0]
 
     print(input_ids.tolist())
