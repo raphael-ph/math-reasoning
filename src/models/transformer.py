@@ -261,7 +261,7 @@ class Transformer(nn.Module):
             logits = logits.view(B*T, C)
             targets = targets.view(-1)
 
-            loss = F.cross_entropy(logits, targets)
+            loss = F.cross_entropy(logits, targets, ignore_index=-100) # ignores the masks -> Model does not learn from mask.
 
         return logits, loss
 
