@@ -441,7 +441,7 @@ if __name__ == "__main__":
     logger = get_logger("trainer")
     # -------------------------------------------------
     CORPUS_PATH = "data/posttraining/metamath_sympy"
-    dataset = SFTFormalizerDataset(CORPUS_PATH, tokenizer, CONTEXT_SIZE)
+    dataset = SFTFormalizerDataset(CORPUS_PATH, tokenizer, CONTEXT_SIZE, split="train")
 
     print(len(dataset))
     input_ids, label_ids, code_out = dataset[0]
