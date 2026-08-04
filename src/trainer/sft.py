@@ -53,6 +53,7 @@ class SFTFormalizerDataset(Dataset):
 
         # configuring the tokenizer truncation strategy
         self.tokenizer.enable_truncation(max_length=self.context_size + 1, direction="left")
+        self.tokenizer.add_special_tokens("<|MASK|>")
 
         # loading dataset
         file_list = glob.glob(f"{corpus_path}/*.parquet", recursive=True)
@@ -100,9 +101,6 @@ class SFTFormalizerDataset(Dataset):
             "code_output": self.dataset["code_output"][index].as_py(),  # code execution output
         }
 
-        query_tokens = self.tokenizer.encode(item["query"])
-        sympy_tokens = self.tokenizer.encode(item["sympy"])
-
         # format the final input
         input_query = f"<|bos|> <|user|> {item['query']} <|assistant|> {item['sympy']}" # EOT token is already appended in the dataset
 
@@ -113,6 +111,23 @@ class SFTFormalizerDataset(Dataset):
         if len(ids) < self.context_size + 1:
             ids = ids + [pad_id] * (self.context_size + 1 - len(ids))
 
+        # attention masking
+        _logger.debug(60*"*")
+        _logger.debug("Unmasked IDs")
+        _logger.debug(ids)
+        _logger.debug(60*"*")
+        assistant_id = self.tokenizer.token_to_id("<|assistant|>")
+        slice_anchor = ids.index(assistant_id)
+        for i in range(slice_anchor + 1):
+            ids[i] = self.tokenizer.token_to_id("<|MASK|>") # mask everything before the <|assistant|> token
+        _logger.debug(60*"*")
+        _logger.debug("Masked IDs")
+        _logger.debug(ids)
+        _logger.debug(60*"*")
+
+        full_tensor = torch.tensor(ids, dtype=torch.long)
+        input_ids = full_tensor[:-1]  # 0 to N-1
+        label_ids = full_tensor[1:]  # 1 to N
 
         return input_ids, label_ids, item["code_output"]
 
