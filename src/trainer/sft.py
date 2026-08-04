@@ -232,10 +232,10 @@ class SFTTrainer(BaseTrainer):
     
                 for i in range(start_step, self.config.max_iters):
                     try:
-                        xb, yb = next(train_iter)
+                        xb, yb, code_output = next(train_iter)
                     except StopIteration:
                         train_iter = iter(self._train_dataloader)
-                        xb, yb = next(train_iter)
+                        xb, yb, code_output = next(train_iter)
     
                     xb, yb = xb.to(self.config.device), yb.to(self.config.device)
     
@@ -397,10 +397,10 @@ class SFTTrainer(BaseTrainer):
 
             for k in range(self.config.eval_iters):
                 try:
-                    X, Y = next(loader_iter)
+                    X, Y, code_output = next(loader_iter)
                 except StopIteration:
                     loader_iter = iter(loader)
-                    X, Y = next(loader_iter)
+                    X, Y, code_output = next(loader_iter)
 
                 X, Y = X.to(self.config.device), Y.to(self.config.device)
                 with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
