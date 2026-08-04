@@ -32,5 +32,11 @@ scrape-metamath-sympy:
 run-formalizer-training:
 	uv run -m scripts.train_formalizer
 
+# --- SFT ---
+BASE_MODEL ?= models/formalizer/best_model.pt
+
+sft-formalizer:
+	uv run -m scripts.train_sft --base-model $(BASE_MODEL)
+
 mlflow-ui:
 	mlflow ui --backend-store-uri sqlite:///mlruns.db --port 5000
