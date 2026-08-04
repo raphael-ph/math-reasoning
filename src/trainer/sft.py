@@ -35,7 +35,7 @@ from ..utils.logger import get_logger
 from .base import BaseTrainer
 
 # set-up logging
-_logger = get_logger("formalizer_posttraining", level="DEBUG")
+_logger = get_logger("formalizer_posttraining", level="INFO")
 
 SHUFFLING_SEED = 42
 
