@@ -210,11 +210,9 @@ class SFTTrainer(BaseTrainer):
             mlflow.set_experiment("Formalizer_Training")
     
             checkpoint_interval = getattr(self.config, "checkpoint_interval", 1000)
-            checkpoint_dir = Path("models/formalizer")
-            checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    
             final_model_path = Path(self.config.final_model_path)
-            final_model_path.parent.mkdir(parents=True, exist_ok=True)
+            checkpoint_dir = final_model_path.parent
+            checkpoint_dir.mkdir(parents=True, exist_ok=True)
             best_model_path = checkpoint_dir / "best_model.pt"
     
             _logger.info(f"Starting training on {self.config.device} from step {start_step}...")
@@ -314,7 +312,7 @@ class SFTTrainer(BaseTrainer):
     def resume_from_checkpoint(self, checkpoint_dir: Optional[Path] = None) -> None:
         """Find the latest local checkpoint in checkpoint_dir and resume training from it."""
         if checkpoint_dir is None:
-            checkpoint_dir = Path("models/formalizer")
+            checkpoint_dir = Path(self.config.final_model_path).parent
 
         checkpoints = list(checkpoint_dir.glob("checkpoint_step_*.pt"))
         if not checkpoints:
