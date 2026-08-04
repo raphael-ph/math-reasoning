@@ -53,7 +53,6 @@ class SFTFormalizerDataset(Dataset):
 
         # configuring the tokenizer truncation strategy
         self.tokenizer.enable_truncation(max_length=self.context_size + 1, direction="left")
-        self.tokenizer.add_special_tokens("<|MASK|>")
 
         # loading dataset
         file_list = glob.glob(f"{corpus_path}/*.parquet", recursive=True)
@@ -111,23 +110,25 @@ class SFTFormalizerDataset(Dataset):
         if len(ids) < self.context_size + 1:
             ids = ids + [pad_id] * (self.context_size + 1 - len(ids))
 
-        # attention masking
-        _logger.debug(60*"*")
-        _logger.debug("Unmasked IDs")
-        _logger.debug(ids)
-        _logger.debug(60*"*")
+        # build the loss mask: True marks positions that must never be a training target
+        # (prompt, up to and including <|assistant|>, plus trailing padding)
         assistant_id = self.tokenizer.token_to_id("<|assistant|>")
         slice_anchor = ids.index(assistant_id)
-        for i in range(slice_anchor + 1):
-            ids[i] = self.tokenizer.token_to_id("<|MASK|>") # mask everything before the <|assistant|> token
-        _logger.debug(60*"*")
-        _logger.debug("Masked IDs")
-        _logger.debug(ids)
-        _logger.debug(60*"*")
+        ignore_mask = [i <= slice_anchor or tok_id == pad_id for i, tok_id in enumerate(ids)]
 
         full_tensor = torch.tensor(ids, dtype=torch.long)
+        mask_tensor = torch.tensor(ignore_mask, dtype=torch.bool)
+
         input_ids = full_tensor[:-1]  # 0 to N-1
-        label_ids = full_tensor[1:]  # 1 to N
+        label_ids = full_tensor[1:].clone()  # 1 to N; clone — overlaps input_ids' storage otherwise
+        label_ids[mask_tensor[1:]] = -100
+
+        _logger.debug(60*"*")
+        _logger.debug("Input IDs")
+        _logger.debug(input_ids.tolist())
+        _logger.debug("Label IDs (masked)")
+        _logger.debug(label_ids.tolist())
+        _logger.debug(60*"*")
 
         return input_ids, label_ids, item["code_output"]
 
