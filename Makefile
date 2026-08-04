@@ -39,5 +39,4 @@ sft-formalizer:
 	uv run -m scripts.train_sft --base-model $(BASE_MODEL)
 
 mlflow-ui:
-	( sleep 1 && open http://localhost:5000 ) &
 	mlflow ui --backend-store-uri sqlite:///mlruns.db --port 5000
