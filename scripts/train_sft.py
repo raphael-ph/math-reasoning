@@ -32,7 +32,10 @@ logger = get_logger("sft_trainer")
 config = BaseTrainerConfig(
     vocab_size=VOCAB_SIZE,
     context_size=CONTEXT_SIZE,
-    max_iters=3_000,
+    # we have 6M total tokens on the train split. With 6k iters, we hit 16 epochs, same as the
+    # "Training language models to follow instructions with human feedback" paper
+    # link: http://arxiv.org/abs/2203.02155
+    max_iters=6_000, 
     eval_iters=50,
     eval_interval=200,
     checkpoint_interval=500,
