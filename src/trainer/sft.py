@@ -53,7 +53,7 @@ class SFTFormalizerDataset(Dataset):
 
         # configuring the tokenizer truncation strategy
         self.tokenizer.enable_truncation(max_length=self.context_size + 1, direction="left")
-        self.tokenizer.add_special_tokens("<|MASK|>")
+        self.tokenizer.add_special_tokens(["<|MASK|>"])
 
         # loading dataset
         file_list = glob.glob(f"{corpus_path}/*.parquet", recursive=True)
@@ -440,7 +440,7 @@ if __name__ == "__main__":
     logger = get_logger("trainer")
     # -------------------------------------------------
     CORPUS_PATH = "data/posttraining/metamath_sympy"
-    dataset = SFTFormalizerDataset(CORPUS_PATH, tokenizer, CONTEXT_SIZE)
+    dataset = SFTFormalizerDataset(CORPUS_PATH, tokenizer, CONTEXT_SIZE, split="train")
 
     print(len(dataset))
     input_ids, label_ids, code_out = dataset[0]
