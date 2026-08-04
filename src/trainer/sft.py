@@ -445,5 +445,3 @@ if __name__ == "__main__":
     input_ids, label_ids, code_out = dataset[0]
 
     print(input_ids.tolist())
-    print(tokenizer.decode(label_ids.tolist()))
-    print(code_out)
