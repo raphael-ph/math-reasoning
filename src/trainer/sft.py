@@ -9,7 +9,6 @@
 import glob
 import time
 import numpy as np
-import pyarrow as pa
 from pathlib import Path
 from datetime import timedelta
 from typing import Tuple, Optional, Literal
@@ -61,22 +60,24 @@ class SFTFormalizerDataset(Dataset):
             _logger.debug(f)
         self.dataset = ds.dataset(file_list, format="parquet").to_table()
 
-        # drop rows whose completion alone (<|assistant|> + sympy) can't fit in the
-        # context window — left-truncation would otherwise cut away the <|assistant|>
-        # anchor itself, breaking the slice_anchor lookup in __getitem__
-        keep_mask = [
+        # rows whose completion alone (<|assistant|> + sympy) can't fit in the context
+        # window — left-truncation would otherwise cut away the <|assistant|> anchor
+        # itself, breaking the slice_anchor lookup in __getitem__. These are excluded
+        # from the shuffle pool below, but self.dataset stays the full, untouched table
+        # so absolute row positions (and any indices cached from it) never shift.
+        fits_mask = np.array([
             len(self.tokenizer.encode(f" <|assistant|> {sympy}").ids) < self.context_size + 1
             for sympy in self.dataset["output"].to_pylist()
-        ]
-        dropped = len(keep_mask) - sum(keep_mask)
+        ])
+        skipped = len(fits_mask) - fits_mask.sum()
         _logger.info(
-            f"Dropped {dropped}/{len(keep_mask)} rows whose completion alone "
+            f"Skipping {skipped}/{len(fits_mask)} rows whose completion alone "
             f"exceeds context_size ({self.context_size})"
         )
-        self.dataset = pc.filter(self.dataset, pa.array(keep_mask))
+        eligible_indices = np.nonzero(fits_mask)[0]
 
         # shuffle dataset
-        indices = self.__shuffle_table(self.dataset)
+        indices = self.__shuffle_indices(eligible_indices)
 
         train_indices = indices[:train_size]
         val_indices = indices[train_size : train_size + val_size]
@@ -147,9 +148,9 @@ class SFTFormalizerDataset(Dataset):
         return input_ids, label_ids, item["code_output"]
 
     # --- Helper ---
-    def __shuffle_table(self, table: pa.Table) -> np.array:
-        """Shuffles the parquet table and returns the shuffled indices as np.arr"""
-        indices = np.array(range(table.num_rows))
+    def __shuffle_indices(self, indices: np.array) -> np.array:
+        """Shuffles the given (absolute) row indices with a fixed seed"""
+        indices = indices.copy()
 
         random_generator = np.random.default_rng(seed=SHUFFLING_SEED)
         random_generator.shuffle(indices)
