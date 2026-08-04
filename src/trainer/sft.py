@@ -436,7 +436,6 @@ if __name__ == "__main__":
     VOCAB_SIZE = vocab_config["vocab_size"]
     CONTEXT_SIZE = vocab_config["context_size"]
     tokenizer = Tokenizer.from_file(TOKENIZER_PATH)
-    logger = get_logger("trainer")
     # -------------------------------------------------
     CORPUS_PATH = "data/posttraining/metamath_sympy"
     dataset = SFTFormalizerDataset(CORPUS_PATH, tokenizer, CONTEXT_SIZE, split="train")
