@@ -7,7 +7,7 @@ from src.inference.formalizer_engine import FormalizerInference, GenerationConfi
 ## Paths
 VOCAB_METADATA_PATH = "./data/corpus/metadata.json"
 BASE_MODEL_PATH = Path("models/formalizer/best_model.pt")
-SFT_MODEL_PATH = Path("models/sft/formalizer/best_model.pt")
+SFT_MODEL_PATH = Path("models/sft/formalizer_v2/final_model.pt")
 ## Vars
 with open(VOCAB_METADATA_PATH, "rb") as file:
     f = file.read()
