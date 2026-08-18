@@ -265,7 +265,23 @@ class Transformer(nn.Module):
 
         return logits, loss
 
-    def generate(self, idx, max_new_tokens):
+    def _top_p_filter(self, probs, top_p):
+        """Nucleus (top-p) filtering: zeroes out the tail of the distribution beyond
+        the smallest set of tokens whose cumulative probability exceeds top_p, then
+        renormalizes so the remaining probabilities sum to 1.
+        """
+        sorted_probs, sorted_indices = torch.sort(probs, descending=True, dim=-1)
+        cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+
+        # shift by sorted_probs so the token that first crosses top_p is kept (nucleus boundary)
+        sorted_mask = cumulative_probs - sorted_probs > top_p
+        sorted_probs[sorted_mask] = 0.0
+
+        probs = torch.zeros_like(probs).scatter_(-1, sorted_indices, sorted_probs)
+        probs = probs / probs.sum(dim=-1, keepdim=True)
+        return probs
+
+    def generate(self, idx, max_new_tokens, top_p=None):
         """Implementing the inference pass of the transformer"""
         for _ in range(max_new_tokens):
             B, T = idx.shape
@@ -277,6 +293,8 @@ class Transformer(nn.Module):
             logits = logits[:, -1, :] # (B, C)
             # softmax and sampling
             probs = F.softmax(logits, dim=-1)
+            if top_p is not None:
+                probs = self._top_p_filter(probs, top_p)
             next_token = torch.multinomial(probs, 1)
             # now we concatenate the next token on the sequence
             idx = torch.cat((idx, next_token), dim=-1)
