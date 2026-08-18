@@ -281,7 +281,7 @@ class Transformer(nn.Module):
         probs = probs / probs.sum(dim=-1, keepdim=True)
         return probs
 
-    def generate(self, idx, max_new_tokens, top_p=None, eos_token_id=None):
+    def generate(self, idx, max_new_tokens, top_p=None, eos_token_id=None, temperature=1.0):
         """Implementing the inference pass of the transformer"""
         for _ in range(max_new_tokens):
             B, T = idx.shape
@@ -292,10 +292,14 @@ class Transformer(nn.Module):
             # focus only on last time step
             logits = logits[:, -1, :] # (B, C)
             # softmax and sampling
-            probs = F.softmax(logits, dim=-1)
-            if top_p is not None:
-                probs = self._top_p_filter(probs, top_p)
-            next_token = torch.multinomial(probs, 1)
+            if temperature == 0:
+                # temperature=0 is greedy decoding — dividing by it would be a div-by-zero
+                next_token = logits.argmax(dim=-1, keepdim=True)
+            else:
+                probs = F.softmax(logits / temperature, dim=-1)
+                if top_p is not None:
+                    probs = self._top_p_filter(probs, top_p)
+                next_token = torch.multinomial(probs, 1)
             # now we concatenate the next token on the sequence
             idx = torch.cat((idx, next_token), dim=-1)
 
