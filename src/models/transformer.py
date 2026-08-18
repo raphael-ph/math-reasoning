@@ -281,7 +281,7 @@ class Transformer(nn.Module):
         probs = probs / probs.sum(dim=-1, keepdim=True)
         return probs
 
-    def generate(self, idx, max_new_tokens, top_p=None):
+    def generate(self, idx, max_new_tokens, top_p=None, eos_token_id=None):
         """Implementing the inference pass of the transformer"""
         for _ in range(max_new_tokens):
             B, T = idx.shape
@@ -298,5 +298,9 @@ class Transformer(nn.Module):
             next_token = torch.multinomial(probs, 1)
             # now we concatenate the next token on the sequence
             idx = torch.cat((idx, next_token), dim=-1)
+
+            # stop once every sequence in the batch has produced the EOS token
+            if eos_token_id is not None and (next_token == eos_token_id).all():
+                break
 
         return idx, loss
