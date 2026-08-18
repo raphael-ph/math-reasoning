@@ -15,7 +15,7 @@ from src.utils.logger import get_logger
 TOKENIZER_PATH = "data/vocab/tokenizer_vocab.json"
 VOCAB_METADATA_PATH = "data/corpus/metadata.json"
 CORPUS_PATH = "data/posttraining/metamath_sympy"
-FINAL_MODEL_PATH = "models/sft/formalizer/final_model.pt"
+FINAL_MODEL_PATH = "models/sft/formalizer_v2/final_model.pt"
 DEFAULT_BASE_MODEL_PATH = "models/formalizer/best_model.pt"
 
 # ---------------- Global Vars --------------------
@@ -35,7 +35,7 @@ config = BaseTrainerConfig(
     # we have 6M total tokens on the train split. With 6k iters, we hit 16 epochs, same as the
     # "Training language models to follow instructions with human feedback" paper
     # link: http://arxiv.org/abs/2203.02155
-    max_iters=6_000, 
+    max_iters=12_000, # enhancing now to 12k steps to try to force model to overfit
     eval_iters=50,
     eval_interval=200,
     checkpoint_interval=500,
