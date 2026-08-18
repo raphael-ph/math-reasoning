@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 from src.models.transformer import Transformer
-from src.inference.formalizer_engine import FormalizerInference
+from src.inference.formalizer_engine import FormalizerInference, GenerationConfig
 
 # --- CONFIGURATION ----
 ## Paths
@@ -29,8 +29,10 @@ def build_model() -> Transformer:
                 n_layers=n_layer
             )
 
-base_formalizer = FormalizerInference(model_path=BASE_MODEL_PATH, model=build_model())
-sft_formalizer = FormalizerInference(model_path=SFT_MODEL_PATH, model=build_model())
+generation_config = GenerationConfig(top_p=0.9, temperature=0.8)
+
+base_formalizer = FormalizerInference(model_path=BASE_MODEL_PATH, model=build_model(), generation_config=generation_config)
+sft_formalizer = FormalizerInference(model_path=SFT_MODEL_PATH, model=build_model(), generation_config=generation_config)
 
 # A natural-language, informal math resolution — this is exactly what the Formalizer
 # is meant to translate into sympy code.
@@ -44,10 +46,14 @@ if __name__ == "__main__":
     print(60*"=")
     print("BASE MODEL (pretrained, no SFT)")
     print(60*"=")
+    print(f"Generation config: {base_formalizer.generation_config}")
+    print(f"EOS token id (resolved from tokenizer): {base_formalizer.eos_token_id}")
     print(base_formalizer.run(TEST_PROMPT))
 
     print(60*"=")
     print("SFT MODEL")
     print(60*"=")
+    print(f"Generation config: {sft_formalizer.generation_config}")
+    print(f"EOS token id (resolved from tokenizer): {sft_formalizer.eos_token_id}")
     sft_prompt = f"<|bos|> <|user|> {TEST_PROMPT} <|assistant|>"
     print(sft_formalizer.run(sft_prompt))
