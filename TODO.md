@@ -1,3 +1,15 @@
+# TODO — 2026-09-15
+
+## Must do
+
+- [ ] Design the reward function(s) for GRPO (`src/rewards/`). Only the
+      `RewardFn` interface exists so far (`src/rewards/base.py`):
+      `(prompt_text, completion_text, metadata) -> float`. Need a concrete
+      implementation that checks a completion's correctness against the
+      dataset row's expected answer (`metadata`) — e.g. sympy/numeric
+      equivalence for the math problems — before `GRPOTrainer` can actually
+      train.
+
 # TODO — 2026-07-22
 
 ## Done today
