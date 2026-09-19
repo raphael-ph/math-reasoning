@@ -55,6 +55,9 @@ SYMPY_BLOCK_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
+SYMPY_IMPORT_RE = re.compile(r"^\s*import\s+sympy\s+as\s+sp\s*$", re.IGNORECASE | re.MULTILINE)
+SYMPY_IMPORT_LINE = "import sympy as sp"
+
 _logger = get_logger("scrape_posttraining")
 
 
@@ -71,6 +74,8 @@ def clean_sympy_output(raw_output: str) -> str | None:
     if not blocks:
         return None
     code = "\n".join(block.strip() for block in blocks)
+    if not SYMPY_IMPORT_RE.search(code):
+        code = f"{SYMPY_IMPORT_LINE}\n\n{code}"
     return f"{code}\n{EOT_TOKEN}"
 
 
