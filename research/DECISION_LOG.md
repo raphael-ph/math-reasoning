@@ -267,6 +267,13 @@ alternative, to keep MLflow storage from ballooning over a full training run):
   ask more narrowly) because seeing *successful* completions matters too, e.g. to catch
   the model finding a degenerate way to get the right number.
 
+**Implementation:** `mlflow.log_table(artifact_file="rollout_traceability.json")` (appends
+rows across repeated calls within a run) with one row per completion — `step`, `split`
+(train/val), `prompt`, and every `ScoredCompletion` field. Cheap aggregate metrics
+(`train/val_execute_rate`, `train/val_correct_rate`) are logged every eval step
+regardless, alongside the existing reward metrics, so the trend line survives even
+without opening the full table.
+
 ---
 
 ## 2026-09-19 — GRPO training script and hyperparameter sanity check
@@ -335,9 +342,101 @@ confirmed scraped there, treat it as a first smoke test of the pipeline mechanic
 table) rather than a real training run, then revisit `max_iters`/`group_size` once
 real throughput numbers exist.
 
-**Implementation:** `mlflow.log_table(artifact_file="rollout_traceability.json")` (appends
-rows across repeated calls within a run) with one row per completion — `step`, `split`
-(train/val), `prompt`, and every `ScoredCompletion` field. Cheap aggregate metrics
-(`train/val_execute_rate`, `train/val_correct_rate`) are logged every eval step
-regardless, alongside the existing reward metrics, so the trend line survives even
-without opening the full table.
+---
+
+## 2026-09-19 — Coordinated SFT/GRPO/benchmark split, and correcting an RL-data-size assumption
+
+**Problem found.** `SFTFormalizerDataset` and `GRPOPromptDataset` each independently
+shuffle and persist their own train/val split — different seeds, different pools,
+zero awareness of each other. Nothing has ever reserved a held-out benchmark set at
+all (the "still nothing computed/persisted for it" gap flagged in `TODO.md` back on
+2026-07-22, still unresolved). Left as-is, a row used in SFT training could just as
+easily land in GRPO's split, or worse, in whatever set eventually gets used to report
+final benchmark numbers — silently invalidating exactly the kind of eval integrity
+the contamination check earlier today was trying to establish for the *external*
+benchmarks (GSM8K/MATH-500/ENEM/BLUEX). This is the same class of problem, just
+internal to our own corpus.
+
+**Complication:** SFT-v3 was already training on the SSH machine at this point, using
+a split it had already committed to disk (persisted the moment
+`SFTFormalizerDataset` is constructed, before training even starts) — computed under
+the old, uncoordinated, per-class scheme. Two options: (a) treat SFT's already-fixed
+split as immutable and carve GRPO's split plus a benchmark holdout only out of
+whatever it didn't touch, or (b) stop the in-progress run and regenerate all splits
+together from scratch. **Decision: (b).** The user opted to stop training rather than
+retrofit around a split that was never designed with a benchmark holdout in mind —
+cleaner to have one coordinated source of truth than to carry the old scheme's gap
+forward indefinitely.
+
+**Implementation:** `src/preprocessing/split_dataset.py` (`make split-dataset`) —
+a single script that must run once, after `scrape-metamath-sympy` and before either
+`sft-formalizer` or `grpo-formalizer`. It shuffles the whole eligible pool exactly
+once (same eligibility filter as `SFTFormalizerDataset`'s own — a row whose
+`<|assistant|> {sympy}` completion alone exceeds `context_size` is excluded from
+every split, not just SFT's, so there's one single universe of "usable" rows project-
+wide) and slices off, in order: the benchmark holdout first (protected regardless of
+how SFT/GRPO's own sizes change later), then SFT train/val, then GRPO train/val.
+Disjointness across all five resulting sets is asserted programmatically before
+anything is written, not just assumed from the slicing arithmetic. Both
+`SFTFormalizerDataset` and `GRPOPromptDataset` needed zero code changes — both already
+had "compute-and-persist only if the file doesn't exist yet, otherwise just load it"
+logic, so pre-writing the files here means they simply load this script's output.
+
+**Split sizes chosen: `sft_train=15000, sft_val=3000, grpo_train=15000, grpo_val=3000,
+benchmark_holdout=2000`** — i.e., GRPO's split kept the same scale as SFT's. This
+followed a literature check that changed *why* that's the right call, not the number
+itself:
+
+- **Initial framing (revised): "GRPO/RL needs less data because it averages over a
+  group" — checked and rejected.** Group averaging (GRPO's group-relative advantage
+  estimate) is about how many *samples per prompt* you need for a low-variance
+  baseline (DeepSeekMath uses `group_size=64` — see below), not about how many
+  *unique prompts* your training set needs. These are different axes; no claim in the
+  paper ties the former to needing fewer of the latter.
+- **InstructGPT precedent points the other way:** SFT used ~13k prompts, PPO used
+  ~31k (arXiv:2203.02155) — the RL phase used ~2.4x *more* unique prompts than SFT,
+  not fewer.
+- **DeepSeekMath's actual RL-stage subset, quoted directly by the user:** *"The
+  training data of RL are chain-of-thought-format questions related to GSM8K and MATH
+  from the SFT data, which consists of around 144K questions. We exclude other SFT
+  questions to investigate the impact of RL on benchmarks that lack data throughout
+  the RL phase."* This is a **domain restriction** (keep only GSM8K/MATH-CoT
+  questions from a broader, multi-domain SFT mix; deliberately exclude other SFT
+  domains to test whether RL gains transfer to benchmarks the RL phase never touched),
+  not a quantity-reduction decision, and not "less data because of averaging" either.
+  It doesn't map onto our corpus cleanly: `metamath_sympy` is already single-domain —
+  there's no "other SFT domain" for GRPO to exclude the way DeepSeekMath excluded
+  non-math domains, so this precedent is closer to *not directly applicable* to our
+  split-sizing question than to supporting either a bigger or smaller GRPO split.
+- **Net conclusion:** neither paper's RL-vs-SFT data-size ratio transfers cleanly to
+  this project (different task, different reason for their ratio in each case), so
+  there's no literature-derived answer here — `grpo_train_size = sft_train_size` was
+  kept as a neutral default in the absence of evidence either way, not because either
+  paper actually endorses it.
+
+**Other numbers confirmed or corrected against the user's exact DeepSeekMath quote**
+(*"we set the learning rate of the policy model as 1e-6. The KL coefficient is 0.04.
+For each question, we sample 64 outputs. The max length is set to 1024, and the
+training batch size is 1024."*):
+- `learning_rate=1e-6` and `kl_coef=0.04` — already matched, confirmed correct.
+- `max_length=1024` — matches our `context_size` exactly, confirming our config
+  terminology lines up with the paper's.
+- `group_size=64`, and "training batch size 1024" resolves to **16 prompts/step**
+  (1024 total sampled sequences ÷ 64 samples/question) — both far larger than our
+  defaults (`group_size=8`, `batch_size=4`, an 8x and 4x gap respectively). Already
+  flagged as a first-run, compute-constrained starting point in the earlier
+  hyperparameter sanity-check entry; recorded here again specifically tied to the
+  paper's exact numbers, so the gap reads as an acknowledged tradeoff in the thesis,
+  not an oversight.
+
+**Also fixed while writing this entry:** an earlier edit to this log had
+accidentally orphaned a paragraph (the `mlflow.log_table` implementation detail) at
+the very end of the file, disconnected from the "Full rollout traceability" section
+it belonged to — moved back into place. Worth double-checking this log's structure
+after any edit that inserts near existing content, since a misplaced paragraph in a
+document meant to be citable is worse than a missing one.
+
+**Operational sequencing on the SSH machine:** stop the in-progress SFT-v3 run;
+delete its old `data/posttraining/metamath_sympy/sft/{train,val}_indices.npy` (computed
+under the pre-coordination scheme); run `make split-dataset`; restart `make
+sft-formalizer` (now loads the coordinated split); later, `make grpo-formalizer`.
