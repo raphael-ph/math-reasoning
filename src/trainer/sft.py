@@ -36,16 +36,20 @@ from .base import BaseTrainer
 # set-up logging
 _logger = get_logger("formalizer_posttraining", level="INFO")
 
-SHUFFLING_SEED = 42
-
 class SFTFormalizerDataset(Dataset):
-    """Implements the Dataset for supervised fine tuning"""
-    def __init__(self, corpus_path: Path, 
-                 tokenizer: Tokenizer, 
-                 context_size: int, 
-                 split: Literal["train", "val"],
-                 train_size: int = 15000, 
-                 val_size: int = 3000):
+    """Implements the Dataset for supervised fine tuning.
+
+    Train/val row selection is NOT computed here — it's read from
+    data/posttraining/metamath_sympy/sft/{train,val}_indices.npy, produced once by
+    `python -m src.preprocessing.split_dataset` (see that module's docstring). That
+    script coordinates SFT's split with GRPO's and a reserved benchmark holdout from a
+    single shuffle, so none of the three can ever overlap — this class used to shuffle
+    and persist its own split independently, which could not provide that guarantee.
+    """
+    def __init__(self, corpus_path: Path,
+                 tokenizer: Tokenizer,
+                 context_size: int,
+                 split: Literal["train", "val"]):
         super().__init__()
         self.tokenizer = tokenizer
         self.context_size = context_size
@@ -60,50 +64,15 @@ class SFTFormalizerDataset(Dataset):
             _logger.debug(f)
         self.dataset = ds.dataset(file_list, format="parquet").to_table()
 
-        # rows whose completion alone (<|assistant|> + sympy) can't fit in the context
-        # window — left-truncation would otherwise cut away the <|assistant|> anchor
-        # itself, breaking the slice_anchor lookup in __getitem__. These are excluded
-        # from the shuffle pool below, but self.dataset stays the full, untouched table
-        # so absolute row positions (and any indices cached from it) never shift.
-        fits_mask = np.array([
-            len(self.tokenizer.encode(f" <|assistant|> {sympy}").ids) < self.context_size + 1
-            for sympy in self.dataset["output"].to_pylist()
-        ])
-        skipped = len(fits_mask) - fits_mask.sum()
-        _logger.info(
-            f"Skipping {skipped}/{len(fits_mask)} rows whose completion alone "
-            f"exceeds context_size ({self.context_size})"
-        )
-        eligible_indices = np.nonzero(fits_mask)[0]
+        indices_path = Path(f"data/posttraining/metamath_sympy/sft/{split}_indices.npy")
+        if not indices_path.exists():
+            raise FileNotFoundError(
+                f"{indices_path} not found — run `python -m src.preprocessing.split_dataset` "
+                "first to generate the coordinated SFT/GRPO/benchmark split."
+            )
+        idx = np.load(indices_path)
+        self.dataset = pc.take(self.dataset, idx)
 
-        # shuffle dataset
-        indices = self.__shuffle_indices(eligible_indices)
-
-        train_indices = indices[:train_size]
-        val_indices = indices[train_size : train_size + val_size]
-
-        # save both indices to disk
-        output_path = Path("data/posttraining/metamath_sympy/sft")
-        output_path.mkdir(parents=True, exist_ok=True)
-
-        train_indices_path = Path(f"{output_path}/train_indices.npy")
-        val_indices_path = Path(f"{output_path}/val_indices.npy")
-
-        # Ensure paths are not overwritten
-        if not train_indices_path.exists():
-            np.save(train_indices_path, train_indices)
-
-        if not val_indices_path.exists():
-            np.save(val_indices_path, val_indices)
-
-        # return dataset
-        if split == "train":
-            idx = np.load("data/posttraining/metamath_sympy/sft/train_indices.npy")
-            self.dataset = pc.take(self.dataset, idx)
-        elif split == "val":
-            idx = np.load("data/posttraining/metamath_sympy/sft/val_indices.npy")
-            self.dataset = pc.take(self.dataset, idx)
-    
     def __len__(self):
         return len(self.dataset)
 
@@ -146,16 +115,6 @@ class SFTFormalizerDataset(Dataset):
         _logger.debug(60*"*")
 
         return input_ids, label_ids, item["code_output"]
-
-    # --- Helper ---
-    def __shuffle_indices(self, indices: np.array) -> np.array:
-        """Shuffles the given (absolute) row indices with a fixed seed"""
-        indices = indices.copy()
-
-        random_generator = np.random.default_rng(seed=SHUFFLING_SEED)
-        random_generator.shuffle(indices)
-
-        return indices
 
 # --- SFTTrainer ---
 class SFTTrainer(BaseTrainer):

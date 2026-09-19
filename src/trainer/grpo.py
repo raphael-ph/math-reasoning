@@ -17,6 +17,7 @@ import pyarrow.compute as pc
 
 # numpy
 import numpy as np
+import pandas as pd
 
 # torch imports
 import torch
@@ -45,8 +46,6 @@ _logger = get_logger("grpo", level="INFO")
 EOS_TOKEN = "<|endoftext|>"
 PAD_TOKEN = "<|pad|>"
 
-SHUFFLING_SEED = 42
-
 class GRPOConfig(BaseTrainerConfig):
     """Extends BaseTrainerConfig with GRPO-specific hyperparameters."""
     group_size: int = Field(..., description="Number of completions (G) sampled per prompt")
@@ -65,14 +64,19 @@ class GRPOPromptDataset(Dataset):
     padded tensors: GRPO tokenizes per-prompt at rollout time (replicas within a group
     must share an identical prompt length, which dataset-level padding to a batch-wide
     max wouldn't preserve), and the completion is generated, not read from the dataset.
+
+    Train/val row selection is NOT computed here — it's read from
+    data/posttraining/metamath_sympy/grpo/{train,val}_indices.npy, produced once by
+    `python -m src.preprocessing.split_dataset` (see that module's docstring). That
+    script coordinates GRPO's split with SFT's and a reserved benchmark holdout from a
+    single shuffle, so none of the three can ever overlap — this class used to shuffle
+    and persist its own split independently, which could not provide that guarantee.
     """
     def __init__(
         self,
         corpus_path: Path,
         split: Literal["train", "val"],
         prompt_column: str = "answer",
-        train_size: int = 15000,
-        val_size: int = 3000,
     ):
         super().__init__()
         self.prompt_column = prompt_column
@@ -83,27 +87,13 @@ class GRPOPromptDataset(Dataset):
             _logger.debug(f)
         self.dataset = ds.dataset(file_list, format="parquet").to_table()
 
-        indices = self.__shuffle_indices(np.arange(len(self.dataset)))
-        train_indices = indices[:train_size]
-        val_indices = indices[train_size : train_size + val_size]
-
-        # kept in its own output dir (rather than reusing SFT's train/val_indices.npy)
-        # since GRPO is a separate training stage with its own split boundary
-        output_path = Path("data/posttraining/metamath_sympy/grpo")
-        output_path.mkdir(parents=True, exist_ok=True)
-
-        train_indices_path = output_path / "train_indices.npy"
-        val_indices_path = output_path / "val_indices.npy"
-
-        if not train_indices_path.exists():
-            np.save(train_indices_path, train_indices)
-        if not val_indices_path.exists():
-            np.save(val_indices_path, val_indices)
-
-        if split == "train":
-            idx = np.load(train_indices_path)
-        elif split == "val":
-            idx = np.load(val_indices_path)
+        indices_path = Path(f"data/posttraining/metamath_sympy/grpo/{split}_indices.npy")
+        if not indices_path.exists():
+            raise FileNotFoundError(
+                f"{indices_path} not found — run `python -m src.preprocessing.split_dataset` "
+                "first to generate the coordinated SFT/GRPO/benchmark split."
+            )
+        idx = np.load(indices_path)
         self.dataset = pc.take(self.dataset, idx)
 
     def __len__(self):
@@ -123,16 +113,6 @@ class GRPOPromptDataset(Dataset):
 
         return prompt_text, metadata
 
-    # --- Helper ---
-    def __shuffle_indices(self, indices: np.ndarray) -> np.ndarray:
-        """Shuffles the given (absolute) row indices with a fixed seed"""
-        indices = indices.copy()
-
-        random_generator = np.random.default_rng(seed=SHUFFLING_SEED)
-        random_generator.shuffle(indices)
-
-        return indices
-
 def prompt_collate_fn(batch: List[Tuple[str, Dict[str, Any]]]) -> List[Tuple[str, Dict[str, Any]]]:
     """Identity collate — rollout is per-prompt, so batches stay a plain list of
     (prompt_text, metadata) pairs rather than being stacked into a tensor."""
@@ -140,10 +120,20 @@ def prompt_collate_fn(batch: List[Tuple[str, Dict[str, Any]]]) -> List[Tuple[str
 
 class GRPORollout:
     """One prompt's rollout: group_size completions sharing an identical (unpadded) length."""
-    def __init__(self, sequences: torch.Tensor, completion_mask: torch.Tensor, rewards: torch.Tensor):
+    def __init__(
+        self,
+        sequences: torch.Tensor,
+        completion_mask: torch.Tensor,
+        rewards: torch.Tensor,
+        diagnostics: List[Optional[Dict[str, Any]]],
+    ):
         self.sequences = sequences            # (G, T) — prompt + generated tokens, no padding
         self.completion_mask = completion_mask  # (G, T) bool — True at completion positions (up to & incl. first EOS)
         self.rewards = rewards                # (G,)
+        # one entry per completion, or None if reward_fn doesn't expose `last_diagnostics`
+        # (see SympyRewardFn) — full traceability (completion text, executes/correct,
+        # error, stdout, predicted vs. expected) for MLflow logging, not used in the loss.
+        self.diagnostics = diagnostics
 
 class GRPOTrainer(BaseTrainer):
     """Implements Group Relative Policy Optimization.
@@ -244,14 +234,51 @@ class GRPOTrainer(BaseTrainer):
         )
 
         rewards = torch.zeros(self.config.group_size, device=self.config.device)
+        diagnostics: List[Optional[Dict[str, Any]]] = []
         for g in range(self.config.group_size):
             # decoded text excludes the EOS token itself — reward_fn should see the
             # actual completion content, not the special token that ends it
             completion_ids = gen_part[g, : first_eos_idx[g].item()].tolist()
             completion_text = self.tokenizer.decode(completion_ids)
             rewards[g] = float(self.reward_fn(prompt_text, completion_text, metadata))
+            # duck-typed: only reward functions that opt into traceability (e.g.
+            # SympyRewardFn) expose this; plain RewardFn callables leave it absent
+            diagnostics.append(getattr(self.reward_fn, "last_diagnostics", None))
 
-        return GRPORollout(sequences=sequences, completion_mask=completion_mask, rewards=rewards)
+        return GRPORollout(sequences=sequences, completion_mask=completion_mask, rewards=rewards, diagnostics=diagnostics)
+
+    @staticmethod
+    def _diagnostic_records(
+        step: int,
+        split: Literal["train", "val"],
+        prompt_batch: List[Tuple[str, Dict[str, Any]]],
+        rollouts: List[GRPORollout],
+    ) -> List[Dict[str, Any]]:
+        """Flattens one step's rollouts into per-completion rows for MLflow's
+        rollout-traceability table: step, split, prompt, plus everything reward_fn's
+        last_diagnostics carried (completion text, executes/correct, error, stdout,
+        predicted vs. expected). Skips completions whose reward_fn didn't expose
+        diagnostics at all."""
+        records = []
+        for (prompt_text, _metadata), rollout in zip(prompt_batch, rollouts):
+            for diag in rollout.diagnostics:
+                if diag is None:
+                    continue
+                records.append({"step": step, "split": split, "prompt": prompt_text, **diag})
+        return records
+
+    @staticmethod
+    def _diagnostic_rates(records: List[Dict[str, Any]]) -> Optional[Dict[str, float]]:
+        """Aggregate execute/correct rates from a batch of diagnostic records — cheap
+        scalar summary of the full traceability table, logged every eval step regardless
+        of whether the full table is inspected."""
+        if not records:
+            return None
+        n = len(records)
+        return {
+            "execute_rate": sum(1.0 for r in records if r["executes"]) / n,
+            "correct_rate": sum(1.0 for r in records if r["correct"]) / n,
+        }
 
     def _pad_and_stack(self, rollouts: List[GRPORollout]) -> Tuple[torch.Tensor, torch.Tensor]:
         """Right-pads each rollout's (G, T) sequences to the batch-wide max length and
@@ -367,7 +394,12 @@ class GRPOTrainer(BaseTrainer):
 
                 is_eval_step = (i == 0 and start_step == 0) or (i % self.config.eval_interval == 0 and i > start_step)
                 if is_eval_step:
-                    eval_metrics = self._estimate_reward()
+                    eval_metrics, val_records = self._estimate_reward(step=i)
+
+                    train_records = self._diagnostic_records(i, "train", prompt_batch, rollouts)
+                    step_records = train_records + val_records
+                    if step_records:
+                        mlflow.log_table(data=pd.DataFrame(step_records), artifact_file="rollout_traceability.json")
 
                     current_time = time.time()
                     elapsed_seconds = current_time - start_time
@@ -384,7 +416,7 @@ class GRPOTrainer(BaseTrainer):
                         f"Elapsed: {timedelta(seconds=int(elapsed_seconds))} | ETA: {timedelta(seconds=int(eta_seconds))}"
                     )
 
-                    mlflow.log_metrics({
+                    step_metrics = {
                         "learning_rate": optimizer.param_groups[0]['lr'],
                         "loss": loss.item(),
                         "train_reward_mean": mean_reward,
@@ -393,7 +425,18 @@ class GRPOTrainer(BaseTrainer):
                         "mean_kl": last_metrics["mean_kl"],
                         "clip_fraction": last_metrics["clip_fraction"],
                         "mean_ratio": last_metrics["mean_ratio"],
-                    }, step=i)
+                    }
+                    # only present when reward_fn exposes diagnostics (e.g. SympyRewardFn) —
+                    # a plain RewardFn callable still trains fine, just without these
+                    train_rates = self._diagnostic_rates(train_records)
+                    if train_rates is not None:
+                        step_metrics["train_execute_rate"] = train_rates["execute_rate"]
+                        step_metrics["train_correct_rate"] = train_rates["correct_rate"]
+                    if "val_execute_rate" in eval_metrics:
+                        step_metrics["val_execute_rate"] = eval_metrics["val_execute_rate"]
+                        step_metrics["val_correct_rate"] = eval_metrics["val_correct_rate"]
+
+                    mlflow.log_metrics(step_metrics, step=i)
 
                     if eval_metrics["val_reward_mean"] > best_mean_reward:
                         best_mean_reward = eval_metrics["val_reward_mean"]
@@ -444,12 +487,18 @@ class GRPOTrainer(BaseTrainer):
         )
 
     @torch.no_grad()
-    def _estimate_reward(self) -> Dict[str, float]:
-        """Rolls out eval_iters prompt batches from val_dataset with no gradient update."""
+    def _estimate_reward(self, step: int) -> Tuple[Dict[str, float], List[Dict[str, Any]]]:
+        """Rolls out eval_iters prompt batches from val_dataset with no gradient update.
+
+        Returns (metrics, diagnostic_records) — the records are the same per-completion
+        traceability rows _diagnostic_records produces for the training batch, tagged
+        split="val", so a step's full rollout table covers both train and val rollouts.
+        """
         self.model.eval()
         val_iter = iter(self._val_dataloader)
 
         all_rewards = []
+        all_records: List[Dict[str, Any]] = []
         for _ in range(self.config.eval_iters):
             try:
                 prompt_batch = next(val_iter)
@@ -457,14 +506,20 @@ class GRPOTrainer(BaseTrainer):
                 val_iter = iter(self._val_dataloader)
                 prompt_batch = next(val_iter)
 
-            for prompt, metadata in prompt_batch:
-                rollout = self._rollout_one_prompt(prompt, metadata)
-                all_rewards.append(rollout.rewards)
+            rollouts = [self._rollout_one_prompt(prompt, metadata) for prompt, metadata in prompt_batch]
+            all_rewards.extend(r.rewards for r in rollouts)
+            all_records.extend(self._diagnostic_records(step, "val", prompt_batch, rollouts))
 
         all_rewards = torch.cat(all_rewards)
         self.model.train()
 
-        return {
+        metrics = {
             "val_reward_mean": all_rewards.mean().item(),
             "val_reward_std": all_rewards.std().item(),
         }
+        rates = self._diagnostic_rates(all_records)
+        if rates is not None:
+            metrics["val_execute_rate"] = rates["execute_rate"]
+            metrics["val_correct_rate"] = rates["correct_rate"]
+
+        return metrics, all_records

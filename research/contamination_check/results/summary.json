@@ -1,0 +1,41 @@
+{
+  "train_dataset": "tfshaman/metamath_sympy_v1",
+  "train_split": "train",
+  "train_rows": 185804,
+  "ngram_n": 4,
+  "jaccard_threshold": 0.6,
+  "results": [
+    {
+      "benchmark": "GSM8K (test)",
+      "total": 1319,
+      "exact_matches": 0,
+      "near_duplicates": 0,
+      "near_duplicate_pct": 0.0,
+      "error": null
+    },
+    {
+      "benchmark": "MATH-500",
+      "total": 500,
+      "exact_matches": 0,
+      "near_duplicates": 8,
+      "near_duplicate_pct": 1.6,
+      "error": null
+    },
+    {
+      "benchmark": "ENEM Challenge",
+      "total": 1432,
+      "exact_matches": 0,
+      "near_duplicates": 0,
+      "near_duplicate_pct": 0.0,
+      "error": null
+    },
+    {
+      "benchmark": "BLUEX (USP/FUVEST + UNICAMP)",
+      "total": 230,
+      "exact_matches": 0,
+      "near_duplicates": 0,
+      "near_duplicate_pct": 0.0,
+      "error": null
+    }
+  ]
+}
