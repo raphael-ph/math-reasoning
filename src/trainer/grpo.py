@@ -46,8 +46,6 @@ _logger = get_logger("grpo", level="INFO")
 EOS_TOKEN = "<|endoftext|>"
 PAD_TOKEN = "<|pad|>"
 
-SHUFFLING_SEED = 42
-
 class GRPOConfig(BaseTrainerConfig):
     """Extends BaseTrainerConfig with GRPO-specific hyperparameters."""
     group_size: int = Field(..., description="Number of completions (G) sampled per prompt")
@@ -66,14 +64,19 @@ class GRPOPromptDataset(Dataset):
     padded tensors: GRPO tokenizes per-prompt at rollout time (replicas within a group
     must share an identical prompt length, which dataset-level padding to a batch-wide
     max wouldn't preserve), and the completion is generated, not read from the dataset.
+
+    Train/val row selection is NOT computed here — it's read from
+    data/posttraining/metamath_sympy/grpo/{train,val}_indices.npy, produced once by
+    `python -m src.preprocessing.split_dataset` (see that module's docstring). That
+    script coordinates GRPO's split with SFT's and a reserved benchmark holdout from a
+    single shuffle, so none of the three can ever overlap — this class used to shuffle
+    and persist its own split independently, which could not provide that guarantee.
     """
     def __init__(
         self,
         corpus_path: Path,
         split: Literal["train", "val"],
         prompt_column: str = "answer",
-        train_size: int = 15000,
-        val_size: int = 3000,
     ):
         super().__init__()
         self.prompt_column = prompt_column
@@ -84,27 +87,13 @@ class GRPOPromptDataset(Dataset):
             _logger.debug(f)
         self.dataset = ds.dataset(file_list, format="parquet").to_table()
 
-        indices = self.__shuffle_indices(np.arange(len(self.dataset)))
-        train_indices = indices[:train_size]
-        val_indices = indices[train_size : train_size + val_size]
-
-        # kept in its own output dir (rather than reusing SFT's train/val_indices.npy)
-        # since GRPO is a separate training stage with its own split boundary
-        output_path = Path("data/posttraining/metamath_sympy/grpo")
-        output_path.mkdir(parents=True, exist_ok=True)
-
-        train_indices_path = output_path / "train_indices.npy"
-        val_indices_path = output_path / "val_indices.npy"
-
-        if not train_indices_path.exists():
-            np.save(train_indices_path, train_indices)
-        if not val_indices_path.exists():
-            np.save(val_indices_path, val_indices)
-
-        if split == "train":
-            idx = np.load(train_indices_path)
-        elif split == "val":
-            idx = np.load(val_indices_path)
+        indices_path = Path(f"data/posttraining/metamath_sympy/grpo/{split}_indices.npy")
+        if not indices_path.exists():
+            raise FileNotFoundError(
+                f"{indices_path} not found — run `python -m src.preprocessing.split_dataset` "
+                "first to generate the coordinated SFT/GRPO/benchmark split."
+            )
+        idx = np.load(indices_path)
         self.dataset = pc.take(self.dataset, idx)
 
     def __len__(self):
@@ -123,16 +112,6 @@ class GRPOPromptDataset(Dataset):
         metadata = row
 
         return prompt_text, metadata
-
-    # --- Helper ---
-    def __shuffle_indices(self, indices: np.ndarray) -> np.ndarray:
-        """Shuffles the given (absolute) row indices with a fixed seed"""
-        indices = indices.copy()
-
-        random_generator = np.random.default_rng(seed=SHUFFLING_SEED)
-        random_generator.shuffle(indices)
-
-        return indices
 
 def prompt_collate_fn(batch: List[Tuple[str, Dict[str, Any]]]) -> List[Tuple[str, Dict[str, Any]]]:
     """Identity collate — rollout is per-prompt, so batches stay a plain list of
