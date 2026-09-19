@@ -267,6 +267,74 @@ alternative, to keep MLflow storage from ballooning over a full training run):
   ask more narrowly) because seeing *successful* completions matters too, e.g. to catch
   the model finding a degenerate way to get the right number.
 
+---
+
+## 2026-09-19 — GRPO training script and hyperparameter sanity check
+
+**Script.** `scripts/train_grpo.py`, mirroring `scripts/train_sft.py`'s structure:
+loads the tokenizer/vocab metadata, builds a `GRPOConfig`, constructs two independent
+`Transformer` instances from the same starting checkpoint (the trained policy and the
+frozen reference model used for the KL penalty — separate instances so training the
+policy can't affect the reference), wires up `SympyRewardFn`, and hands everything to
+`GRPOTrainer`. Also added `make grpo-formalizer`, mirroring the existing
+`sft-formalizer` target.
+
+**Decision: start GRPO from `final_model.pt`, not `best_model.pt`.** SFT
+(`scripts/train_sft.py`) was deliberately trained to overfit (12k steps, "force
+overfit" — see the 2026-07-22 and earlier entries), following the InstructGPT paper's
+finding that a later, overfit SFT checkpoint outperforms the lowest-validation-loss one
+as the starting point for downstream RL. `best_model.pt` tracks lowest val loss and
+would most likely pick an early, pre-overfit checkpoint here — the wrong one for this
+project's chosen approach. `final_model.pt` (the actual last-step checkpoint) is correct.
+
+**Caution flagged and respected: do not run this script against the local corpus.**
+The corpus present on this laptop is still the 500-row smoke-test scrape.
+`GRPOPromptDataset` persists its train/val split indices with the same "don't
+overwrite if exists" guard as `SFTFormalizerDataset` — running the script here first
+would silently poison the split for when the full corpus is scraped on the SSH
+machine (the exact footgun already identified for SFT earlier in this log). The script
+was written and sanity-checked (`py_compile` only) without ever being imported or
+executed, specifically to avoid triggering `GRPOPromptDataset`'s module-level dataset
+construction against the wrong data.
+
+**Hyperparameter sanity check — one real bug caught, one judgment call revised:**
+
+- **`max_new_tokens`: 256 → 768 (bug, caught empirically, not by inspection).**
+  Tokenized the actual scraped shard's `output` column and measured completion
+  length: median 346, p95 647, max 1094 tokens. A 256-token budget would have
+  truncated 78% of completions before they ever reached `print()`/EOS — meaning the
+  vast majority of rollouts would score reward=0 for running out of token budget, not
+  for being mathematically wrong, making the reward signal nearly uninformative for
+  the policy gradient despite the pipeline appearing to "work." 768 leaves only ~1.8%
+  truncated, and still leaves 256 tokens of prompt budget (`context_size` 1024 - 768),
+  comfortably above the prompt side's own p95 (226 tokens, measured the same way).
+  This is the kind of bug that wouldn't show up as a crash or an obviously-bad metric
+  early on — worth remembering to sanity-check length budgets against actual data
+  length distributions, not round numbers, on any future context-window-constrained
+  pipeline change.
+- **`learning_rate`: 1e-5 → 1e-6.** Initially picked 1e-5 (an order of magnitude below
+  SFT's 3e-5) without a specific empirical basis. Revised down to match DeepSeekMath's
+  own published GRPO actor LR exactly (1e-6), on the reasoning that RL updates
+  compound more riskily than SFT's (via the KL penalty and future rollouts building on
+  a bad update), and there's no project-specific data yet to justify deviating from
+  the reference implementation's value.
+- **Left as first-run starting points, explicitly not tuned:** `group_size=8`
+  (DeepSeekMath uses 64, but that's large-scale — 8 is a compute-constrained starting
+  point, larger groups would give a better advantage estimate), `batch_size=4`
+  (untested against real GPU step-time on the SSH machine), `max_iters=1_000` (at
+  batch_size=4, only ~27% of one epoch over the default 15k-row train split — likely
+  enough to validate the pipeline runs at all, likely not enough for real
+  convergence). `top_p=0.9`/`temperature=0.8` kept consistent with the values already
+  used elsewhere in the repo (`main.py`'s generation config). `kl_coef=0.04`,
+  `clip_epsilon=0.2`, `num_inner_epochs=1`, `advantage_eps=1e-4` left at `GRPOConfig`'s
+  defaults, which are themselves taken from the DeepSeekMath paper.
+
+**Next step:** run this on the SSH machine once SFT-v3 finishes and the full corpus is
+confirmed scraped there, treat it as a first smoke test of the pipeline mechanics
+(does it run end-to-end, does the reward signal look sane in the MLflow traceability
+table) rather than a real training run, then revisit `max_iters`/`group_size` once
+real throughput numbers exist.
+
 **Implementation:** `mlflow.log_table(artifact_file="rollout_traceability.json")` (appends
 rows across repeated calls within a run) with one row per completion — `step`, `split`
 (train/val), `prompt`, and every `ScoredCompletion` field. Cheap aggregate metrics
