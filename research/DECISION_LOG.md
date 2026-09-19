@@ -232,3 +232,44 @@ between repeated calls to the same executor.
 **Still open / next step:** wire `sympy_reward` into an actual GRPO training script
 (mirroring `scripts/train_sft.py`), and later — once vanilla GRPO training is validated
 — revisit the MO-GRPO comparison as its own experimental arm.
+
+---
+
+## 2026-09-19 — Full rollout traceability in MLflow for GRPO
+
+**Motivation.** GRPO is much more opaque to debug than SFT: a low reward could mean the
+code crashed, timed out, ran but got the wrong answer, or something else entirely, and
+none of that is visible from a scalar loss/reward curve alone. The user wanted full
+traceability — for every generated completion, whether it executed, what error it hit if
+not, whether the answer was correct, and the raw generated text — logged to MLflow so
+training failures are diagnosable after the fact, not just observable as "reward is low."
+
+**Decision: derive diagnostics from the same single execution already used for the
+reward, not a second one.** `sympy_reward()` (the plain `RewardFn`) is untouched — same
+signature, same behavior, same one execution per completion. A new `SympyRewardFn`
+class wraps the identical scoring logic (`_score_completion`, shared by both) but keeps
+the full `ScoredCompletion` result around as `last_diagnostics` after each call. Chosen
+over changing `RewardFn`'s return type to a dict/tuple (which would have meant touching
+`GRPOTrainer`'s loss-relevant code path just to carry logging metadata through it) —
+`GRPOTrainer` reads `last_diagnostics` via `getattr(self.reward_fn, "last_diagnostics",
+None)` right after calling the reward function, so a plain float-returning `RewardFn`
+still works with zero changes, and only reward functions that opt into traceability pay
+for it.
+
+**Decisions on logging volume** (both explicitly chosen over the more expensive
+alternative, to keep MLflow storage from ballooning over a full training run):
+- **Cadence: only at eval steps** (reusing the existing `eval_interval` cadence already
+  used for `val_reward_mean` etc.), not every single training step. A step generates
+  `batch_size × group_size` completions; logging full text every step across thousands
+  of steps was judged not worth the storage for the added granularity.
+- **Scope: log every completion, correct or not** — not just failures. Rejected
+  logging only incorrect/failed completions (which would have matched the literal
+  ask more narrowly) because seeing *successful* completions matters too, e.g. to catch
+  the model finding a degenerate way to get the right number.
+
+**Implementation:** `mlflow.log_table(artifact_file="rollout_traceability.json")` (appends
+rows across repeated calls within a run) with one row per completion — `step`, `split`
+(train/val), `prompt`, and every `ScoredCompletion` field. Cheap aggregate metrics
+(`train/val_execute_rate`, `train/val_correct_rate`) are logged every eval step
+regardless, alongside the existing reward metrics, so the trend line survives even
+without opening the full table.
