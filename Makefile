@@ -38,5 +38,11 @@ BASE_MODEL ?= models/formalizer/best_model.pt
 sft-formalizer:
 	uv run -m scripts.train_sft --base-model $(BASE_MODEL)
 
+# --- GRPO ---
+SFT_MODEL ?= models/sft/formalizer_v3/final_model.pt
+
+grpo-formalizer:
+	uv run -m scripts.train_grpo --sft-model $(SFT_MODEL)
+
 mlflow-ui:
 	mlflow ui --backend-store-uri sqlite:///mlruns.db --port 5000
