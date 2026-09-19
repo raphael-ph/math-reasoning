@@ -14,7 +14,7 @@ import contextlib
 import io
 import math
 import signal
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any, Dict, Optional
 
 import sympy
@@ -104,21 +104,70 @@ def _parse_last_number(stdout: str) -> Optional[float]:
         return None
 
 
-def sympy_reward(_prompt_text: str, completion_text: str, metadata: Dict[str, Any]) -> float:
-    """Executes the completion once and combines both signals into a single reward,
-    DeepSeek-R1-style (accuracy_reward + format_reward, summed, no per-objective
-    weighting/normalization): 0.0 if it doesn't run, 1.0 if it runs but the answer is
-    wrong, 2.0 if it runs and the answer is correct. Conforms to RewardFn.
-    """
+@dataclass
+class ScoredCompletion:
+    """Everything worth knowing about why a completion scored the way it did — the
+    full diagnostic trail behind a single reward value."""
+    completion_text: str
+    executes: bool
+    correct: bool
+    error: Optional[str]
+    stdout: str
+    predicted: Optional[float]
+    expected: float
+    reward: float
+
+
+def _score_completion(completion_text: str, metadata: Dict[str, Any]) -> ScoredCompletion:
+    """Executes the completion once and derives everything downstream from that one run:
+    DeepSeek-R1-style summed reward (0.0 doesn't run, 1.0 runs but wrong, 2.0 runs and
+    correct) plus the full diagnostic trail for callers that want it."""
     result = run_sympy_completion(completion_text)
-    if not result.ran:
-        return 0.0
+    expected = float(metadata["code_output"])
 
-    executes = 1.0
-    correct = 0.0
-    predicted = _parse_last_number(result.stdout)
-    if predicted is not None:
-        expected = float(metadata["code_output"])
-        correct = 1.0 if math.isclose(predicted, expected, rel_tol=REL_TOL, abs_tol=ABS_TOL) else 0.0
+    predicted = None
+    correct = False
+    if result.ran:
+        predicted = _parse_last_number(result.stdout)
+        if predicted is not None:
+            correct = math.isclose(predicted, expected, rel_tol=REL_TOL, abs_tol=ABS_TOL)
 
-    return executes + correct
+    reward = (1.0 if result.ran else 0.0) + (1.0 if correct else 0.0)
+
+    return ScoredCompletion(
+        completion_text=completion_text,
+        executes=result.ran,
+        correct=correct,
+        error=result.error,
+        stdout=result.stdout,
+        predicted=predicted,
+        expected=expected,
+        reward=reward,
+    )
+
+
+def sympy_reward(_prompt_text: str, completion_text: str, metadata: Dict[str, Any]) -> float:
+    """Plain RewardFn: executes the completion once and returns the combined reward
+    (0.0 / 1.0 / 2.0), with no diagnostics kept around. Use SympyRewardFn instead when
+    the caller (e.g. GRPOTrainer) wants traceability into *why* a completion scored the
+    way it did, without executing the code a second time to get that detail.
+    """
+    return _score_completion(completion_text, metadata).reward
+
+
+class SympyRewardFn:
+    """Stateful RewardFn — same callable signature/contract as sympy_reward (still
+    conforms to RewardFn), but after each call `last_diagnostics` holds the full
+    ScoredCompletion (as a dict) for that call: completion text, executes/correct
+    flags, error, raw stdout, predicted vs. expected value. Callers that want full
+    traceability (e.g. GRPOTrainer logging to MLflow) read this attribute immediately
+    after calling — it's overwritten on the next call, so it's only valid for the
+    single completion just scored, not a history.
+    """
+    def __init__(self):
+        self.last_diagnostics: Optional[Dict[str, Any]] = None
+
+    def __call__(self, _prompt_text: str, completion_text: str, metadata: Dict[str, Any]) -> float:
+        scored = _score_completion(completion_text, metadata)
+        self.last_diagnostics = asdict(scored)
+        return scored.reward
