@@ -15,7 +15,7 @@ from src.utils.logger import get_logger
 TOKENIZER_PATH = "data/vocab/tokenizer_vocab.json"
 VOCAB_METADATA_PATH = "data/corpus/metadata.json"
 CORPUS_PATH = "data/posttraining/metamath_sympy"
-FINAL_MODEL_PATH = "models/sft/formalizer_v2/final_model.pt"
+FINAL_MODEL_PATH = "models/sft/formalizer_v3/final_model.pt"
 DEFAULT_BASE_MODEL_PATH = "models/formalizer/best_model.pt"
 
 # ---------------- Global Vars --------------------
