@@ -222,7 +222,7 @@ class SFTTrainer(BaseTrainer):
             train_iter = iter(self._train_dataloader)
     
             mlflow.set_tracking_uri("sqlite:///mlruns.db")
-            mlflow.set_experiment("Formalizer_Finetuning_v2")
+            mlflow.set_experiment("Formalizer_Finetuning_v3")
     
             checkpoint_interval = getattr(self.config, "checkpoint_interval", 1000)
             final_model_path = Path(self.config.final_model_path)
