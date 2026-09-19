@@ -440,3 +440,51 @@ document meant to be citable is worse than a missing one.
 delete its old `data/posttraining/metamath_sympy/sft/{train,val}_indices.npy` (computed
 under the pre-coordination scheme); run `make split-dataset`; restart `make
 sft-formalizer` (now loads the coordinated split); later, `make grpo-formalizer`.
+
+---
+
+## 2026-09-19 — Removed the now-dead per-class splitting logic from SFT/GRPO
+
+**Prompted by a reproducibility concern, not a bug report.** With
+`split_dataset.py` now the single source of truth for all three splits,
+`SFTFormalizerDataset` and `GRPOPromptDataset` still contained their own original
+shuffle-and-persist-if-missing logic — now permanently dead in practice (the split
+files always exist by the time either class is constructed, so the "compute fresh"
+branch never executes again) but still fully present and readable in the source,
+including two separately-defined `SHUFFLING_SEED = 42` constants in `sft.py` and
+`grpo.py` that no longer influence anything. Left alone, this is exactly the kind of
+thing that confuses a reader (or a thesis committee, or future-self) trying to
+reproduce the pipeline: which seed actually determined the split that produced the
+reported results — 42 (visible in both files) or 1337 (`split_dataset.py`'s, the one
+that actually ran)? The dead code doesn't just look confusing, it's actively
+misleading about provenance.
+
+**Also a real (if minor) performance cost, not just a readability one:**
+`SFTFormalizerDataset.__init__`'s dead branch included tokenizing every row's
+`<|assistant|> {sympy}` text to compute `fits_mask` — full-corpus tokenization work
+that ran on every construction and was then discarded once the "file already exists"
+check hit, silently, with no log message calling out that the result was unused.
+
+**Change:** removed the eligibility/shuffle/persist blocks and the now-unreachable
+`__shuffle_indices` helpers from both classes entirely. Both now simply require
+`data/posttraining/metamath_sympy/{sft,grpo}/{train,val}_indices.npy` to already exist
+(raising `FileNotFoundError` with a pointer to `split_dataset.py` if not) and load
+whichever split the `split` argument asks for. Also dropped the now-unused
+`train_size`/`val_size` constructor parameters from both classes — no caller
+(`scripts/train_sft.py`, `scripts/train_grpo.py`, `sft.py`'s own `__main__` smoke
+test) passed them explicitly, so removing them is not a breaking change to any actual
+call site, just a tightening of the interface to match what the class now actually
+does.
+
+**Verification:** `git stash` + `pytest tests` confirmed the 7 pre-existing test
+failures (all in `test_formalizer_trainer.py`/`test_transformer.py`, unrelated to
+`sft.py`/`grpo.py` — no test in this repo exercises `SFTFormalizerDataset` or
+`GRPOPromptDataset` at all) are unchanged before and after this edit — nothing broke,
+nothing was newly covered either.
+
+**General lesson for this pipeline going forward:** whenever a new coordinating
+script (like `split_dataset.py`) supersedes logic that used to live inside a
+consumer class, sweep the codebase for the old logic and remove it in the same pass —
+don't leave two versions of the truth sitting side by side, even when the old one is
+provably inert. Prompted directly by the user's concern about the codebase staying
+reproducible and unambiguous for the thesis, not something caught incidentally.
