@@ -7,7 +7,8 @@ from src.inference.formalizer_engine import FormalizerInference, GenerationConfi
 ## Paths
 VOCAB_METADATA_PATH = "./data/corpus/metadata.json"
 BASE_MODEL_PATH = Path("models/formalizer/best_model.pt")
-SFT_MODEL_PATH = Path("models/sft/formalizer_v2/final_model.pt")
+SFT_MODEL_PATH_2 = Path("models/sft/formalizer_v2/final_model.pt")
+SFT_MODEL_PATH_3 = Path("models/sft/formalizer_v3/final_model.pt")
 ## Vars
 with open(VOCAB_METADATA_PATH, "rb") as file:
     f = file.read()
@@ -32,7 +33,9 @@ def build_model() -> Transformer:
 generation_config = GenerationConfig(top_p=0.9, temperature=0.8)
 
 base_formalizer = FormalizerInference(model_path=BASE_MODEL_PATH, model=build_model(), generation_config=generation_config)
-sft_formalizer = FormalizerInference(model_path=SFT_MODEL_PATH, model=build_model(), generation_config=generation_config)
+sft_formalizer_2 = FormalizerInference(model_path=SFT_MODEL_PATH_2, model=build_model(), generation_config=generation_config)
+sft_formalizer_3 = FormalizerInference(model_path=SFT_MODEL_PATH_3, model=build_model(), generation_config=generation_config)
+
 
 # A natural-language, informal math resolution — this is exactly what the Formalizer
 # is meant to translate into sympy code.
@@ -51,9 +54,17 @@ if __name__ == "__main__":
     print(base_formalizer.run(TEST_PROMPT))
 
     print(60*"=")
-    print("SFT MODEL")
+    print("SFT MODEL 2")
     print(60*"=")
-    print(f"Generation config: {sft_formalizer.generation_config}")
-    print(f"EOS token id (resolved from tokenizer): {sft_formalizer.eos_token_id}")
+    print(f"Generation config: {sft_formalizer_2.generation_config}")
+    print(f"EOS token id (resolved from tokenizer): {sft_formalizer_2.eos_token_id}")
     sft_prompt = f"<|bos|> <|user|> {TEST_PROMPT} <|assistant|>"
-    print(sft_formalizer.run(sft_prompt))
+    print(sft_formalizer_2.run(sft_prompt))
+
+    print(60*"=")
+    print("SFT MODEL 3")
+    print(60*"=")
+    print(f"Generation config: {sft_formalizer_3.generation_config}")
+    print(f"EOS token id (resolved from tokenizer): {sft_formalizer_3.eos_token_id}")
+    sft_prompt = f"<|bos|> <|user|> {TEST_PROMPT} <|assistant|>"
+    print(sft_formalizer_3.run(sft_prompt))
