@@ -572,3 +572,36 @@ a real one. Also deferred: reward=0.0 across every rollout at step 0, and the ~1
 minute step time (12-day ETA) — `Transformer.generate()` has no KV-cache, recomputing
 the full sequence from scratch per generated token. User asked to scope strictly to
 the OOM for now; these are flagged to revisit once training actually runs.
+
+---
+
+## 2026-09-20 — Found the reward=0.0 cause: a whitespace/IndentationError bug, not model quality
+
+**With the OOM fixed, training ran but reward stayed exactly 0.0** across all 96
+rollouts (train + val) at step 0. The user diagnosed this directly from a real
+completion: `IndentationError: unexpected indent (<string>, line 1)`. SFT's training
+format is `f"...{query} <|assistant|> {sympy}"` — a literal space between
+`<|assistant|>` and the code. The model correctly learned to emit that leading
+space (or more, decode-dependent) as its first generated token(s), exactly matching
+training — this is not model misbehavior. But `run_sympy_completion()`
+(`src/rewards/sympy_execution.py`) passed the raw decoded completion straight into
+`exec()` with no stripping, so Python's parser rejected every single completion at
+the top level before ever reaching the actual code, regardless of whether that code
+was correct.
+
+**Fix:** `code = code.strip()` at the top of `run_sympy_completion()`, before `exec()`.
+Verified against the user's exact failing example — was `IndentationError`, now
+executes and correctly scores `reward=1.0` (the code has a genuine, unrelated logic
+bug — misreads "4 dozen less than Benjamin" as `4` instead of `benjamin_dozen - 4` —
+so once the whitespace artifact is gone, the reward function correctly distinguishes
+"executes, wrong answer" from "doesn't execute at all," which is exactly the signal
+GRPO needs). Also verified `.strip()` doesn't change scoring for already-clean
+completions (with or without leading whitespace, same reward either way).
+
+**Why this matters beyond the immediate fix:** this bug would have silently zeroed
+out the entire reward signal for the whole GRPO run — every completion scoring 0 for
+a reason that had nothing to do with the model's actual mathematical reasoning. Worth
+remembering for the thesis methodology section: a "reward stuck at zero" symptom
+should always be diagnosed by reading actual generated text/errors (which is exactly
+why the MLflow rollout-traceability table exists) before concluding anything about
+model capability — the two look identical from the aggregate metric alone.
