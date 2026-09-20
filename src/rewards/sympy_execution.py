@@ -71,6 +71,13 @@ def run_sympy_completion(code: str, timeout: int = EXEC_TIMEOUT_SECONDS) -> Exec
     Unix-like OS — true for GRPOTrainer's sequential rollout loop, not necessarily true
     if this is ever called from a worker thread/process.
     """
+    # SFT's training format is "...{query} <|assistant|> {sympy}" (literal space before
+    # the code) — the model correctly learned to emit that leading space/whitespace as
+    # its first generated token(s), consistent with training. Python's parser rejects a
+    # top-level statement starting with whitespace (IndentationError) even when the code
+    # is otherwise perfectly valid, so strip it before exec — this is a decode/formatting
+    # artifact to normalize away, not something to penalize the model for.
+    code = code.strip()
     namespace: Dict[str, Any] = {"sp": sympy, "__builtins__": _SAFE_BUILTINS}
     buffer = io.StringIO()
 
