@@ -310,10 +310,10 @@ class GRPOTrainer(BaseTrainer):
 
         with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
             logits, _ = model(input_ids, targets=None)
-        # upcast before log_softmax — the ratio exp(new - old) downstream is precision
-        # sensitive, more than a bf16 forward pass alone can guarantee
-        logits = logits.float()
 
+        # grpo_math.sequence_logprobs keeps logits in bf16 through log_softmax and only
+        # upcasts the small gathered (N, T-1) result — see its docstring for why this
+        # isn't a precision compromise, just avoiding an unnecessary fp32 (N, T-1, V) tensor
         return grpo_math.sequence_logprobs(logits, target_ids)
 
     def train(

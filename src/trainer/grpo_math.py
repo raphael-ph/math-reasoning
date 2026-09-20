@@ -25,19 +25,40 @@ def group_advantages(rewards: torch.Tensor, eps: float = 1e-4) -> torch.Tensor:
     return (rewards - mean) / (std + eps)
 
 
-def sequence_logprobs(logits: torch.Tensor, target_ids: torch.Tensor) -> torch.Tensor:
+def sequence_logprobs(logits: torch.Tensor, target_ids: torch.Tensor, chunk_size: int = 4096) -> torch.Tensor:
     """Gathers per-token log-probabilities of the actual next tokens.
 
     Args:
         logits: (N, T-1, V) raw model logits over the shifted input (positions 0..T-2).
         target_ids: (N, T-1) the actual next-token ids (positions 1..T-1).
+        chunk_size: rows (flattened over N*T) processed per chunk.
 
     Returns:
-        (N, T-1) log-prob assigned by the model to each realized target token.
-    """
-    log_probs = F.log_softmax(logits, dim=-1)
+        (N, T-1) log-prob assigned by the model to each realized target token, fp32.
 
-    return log_probs.gather(-1, target_ids.unsqueeze(-1)).squeeze(-1)
+    log_softmax runs in fp32 on every row, same precision as computing it over the
+    whole (N, T-1, V) tensor at once — this is NOT a bf16-then-upcast shortcut (that
+    was tried and measured to introduce ~0.05 max log-prob error on realistic vocab
+    sizes, which by itself is a ~5-6% worst-case error in the downstream
+    exp(new_logprobs - old_logprobs) ratio GRPO's clipping depends on — unacceptable).
+    Instead, this processes `chunk_size` rows at a time: the (N, T-1, V) logits tensor
+    (often the single largest tensor in a GRPO training step) is never upcast to fp32
+    in one piece, only one chunk of it at a time, capping this operation's peak memory
+    at chunk_size * V * 4 bytes regardless of how large N*T is.
+    """
+    N, T = target_ids.shape
+    V = logits.shape[-1]
+    flat_logits = logits.reshape(N * T, V)
+    flat_targets = target_ids.reshape(N * T)
+
+    chunks = []
+    for start in range(0, flat_logits.shape[0], chunk_size):
+        chunk_logits = flat_logits[start:start + chunk_size].float()
+        chunk_targets = flat_targets[start:start + chunk_size]
+        chunk_log_probs = F.log_softmax(chunk_logits, dim=-1)
+        chunks.append(chunk_log_probs.gather(-1, chunk_targets.unsqueeze(-1)).squeeze(-1))
+
+    return torch.cat(chunks, dim=0).reshape(N, T)
 
 
 def grpo_loss(
