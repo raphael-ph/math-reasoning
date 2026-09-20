@@ -488,3 +488,70 @@ consumer class, sweep the codebase for the old logic and remove it in the same p
 don't leave two versions of the truth sitting side by side, even when the old one is
 provably inert. Prompted directly by the user's concern about the codebase staying
 reproducible and unambiguous for the thesis, not something caught incidentally.
+
+---
+
+## 2026-09-20 — CUDA OOM on first `make grpo-formalizer` attempt, and a wrong first fix caught before shipping it
+
+**Symptom.** First real run of `make grpo-formalizer` on the SSH machine (RTX 5070 Ti,
+~16GB) failed: `CUDA out of memory. Tried to allocate 3.37 GiB` ... `this process has
+13.50 GiB memory in use`, total capacity 15.47 GiB.
+
+**Ruled out stray processes first.** The user asked whether other tmux sessions could
+be holding GPU memory. Checked `nvidia-smi`: `No running processes found`, 2 MiB used.
+The OOM error's own numbers already pointed away from this (13.50 of 13.51 GiB
+currently used GPU-wide was attributed to the *same* failing process), and the
+`nvidia-smi` check confirmed it definitively — this was a genuine "this run needs more
+memory than the card has," not a multi-tenancy or leftover-process issue. Also noted:
+`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` (already set) only helps
+*fragmentation*, not this — total requested (13.5 + 3.37 = 16.87 GiB) genuinely
+exceeds the 15.47 GiB card.
+
+**Root cause, identified by the numbers matching, not just guessed.**
+`GRPOTrainer._sequence_logprobs` (`src/trainer/grpo.py`) did `logits = logits.float()`
+before `log_softmax` — upcasting the *entire* `(batch_size*group_size, T, vocab_size)`
+logits tensor to fp32. At this project's config (32 sequences, T up to `context_size`
+1024, `vocab_size=32000`): `32 * 1024 * 32000 * 4 bytes ~= 3.9 GiB` — matches the
+failed 3.37 GiB allocation almost exactly once the actual (slightly shorter) padded
+length is accounted for. This tensor is computed three times per step
+(`old_logprobs`, `ref_logprobs`, and the backward-requiring `new_logprobs`), making it
+the single largest tensor in a GRPO training step.
+
+**First fix attempt — wrong, caught before committing.** Initial instinct: keep
+`log_softmax` in bf16 (the dtype the forward pass already produces under autocast),
+gather the per-token result, and upcast only that small `(N, T-1)` result to fp32
+afterward — half the memory of the fp32-upcast-before-log_softmax approach. Before
+shipping this, ran a numerical check against the original fp32-throughout computation
+at a realistic `vocab_size=32000`: **max abs log-prob difference ~0.055**, which
+directly feeds `exp(new_logprobs - old_logprobs)` — a ~5.7% *worst-case* error in
+exactly the ratio GRPO's clipped surrogate and KL penalty depend on. The original
+code's own comment ("upcast before log_softmax — the ratio ... is precision
+sensitive") turned out to be correct and important — bf16's ~7-8 bit mantissa isn't
+enough to keep `log_softmax`'s internal exp/sum/log numerically accurate over a
+32k-wide vocab, and that error doesn't wash out, it compounds directly into the
+policy-gradient signal. Reverted before it was ever run.
+
+**Actual fix shipped: chunk the rows, keep fp32 throughout.** Reshaped `(N, T-1, V)`
+to `(N*(T-1), V)` and processed `chunk_size=4096` rows at a time, upcasting only each
+chunk to fp32 rather than the whole tensor at once. `log_softmax` is a row-independent
+operation, so this is mathematically identical to computing it over the full tensor —
+verified **bit-exact** (`torch.equal`, not just "close") against the original
+unchunked fp32 computation. Peak memory for this specific tensor drops from
+`N*T*V*4` bytes to `chunk_size*V*4` bytes — at this project's numbers, roughly
+**3.9 GiB down to ~524 MB** for this operation, a ~7.5x reduction, with zero precision
+change (strictly better than the rejected bf16 approach on both memory *and*
+precision).
+
+**Lesson for this thesis's methodology section, if this kind of tradeoff comes up
+again:** "reduce memory by lowering precision" and "reduce memory by processing in
+smaller chunks at the same precision" are not the same kind of fix, and the first one
+should never be adopted without actually measuring the resulting numerical error
+against the values it feeds downstream — a plausible-sounding memory optimization
+that quietly corrupts a precision-sensitive ratio calculation would have been a much
+worse failure mode than the OOM crash itself, since a crash is loud and a subtly
+biased policy gradient is not.
+
+**If `make grpo-formalizer` still OOMs after this fix:** the next lever, with no code
+change needed, is lowering `batch_size` and/or `group_size` in
+`scripts/train_grpo.py`'s `GRPOConfig` — both linearly shrink the same
+`(batch_size*group_size, T, V)` tensor this fix targeted.
