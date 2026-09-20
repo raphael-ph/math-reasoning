@@ -54,7 +54,10 @@ config = GRPOConfig(
     eval_iters=5,
     eval_interval=50,
     checkpoint_interval=100,
-    batch_size=4,
+    # Cut from 4 after a CUDA OOM on a 16GB card — batch_size (prompts/step) is the
+    # cheaper thing to shrink vs. group_size: it only means fewer distinct prompts per
+    # step (recoverable with more steps), not a noisier per-prompt advantage estimate.
+    batch_size=2,
     # DeepSeekMath's own GRPO actor LR (1e-6) — no empirical basis of our own yet to
     # deviate from it, and erring conservative matters more here than for SFT: a bad
     # policy update compounds across the KL penalty and future rollouts.

@@ -555,3 +555,20 @@ biased policy gradient is not.
 change needed, is lowering `batch_size` and/or `group_size` in
 `scripts/train_grpo.py`'s `GRPOConfig` — both linearly shrink the same
 `(batch_size*group_size, T, V)` tensor this fix targeted.
+
+**Update — still OOM'd on step 1 after the chunking fix**, allocation size down
+(3.37 -> 1.86 GiB) but baseline usage still too tight (13.77/15.47 GiB). Applied the
+next two levers: `batch_size` 4 -> 2 in `scripts/train_grpo.py` (chosen over
+`group_size` — batch_size only costs fewer distinct prompts/step, recoverable with
+more steps, whereas group_size directly determines each prompt's advantage-estimate
+quality), and cast `ref_model` to bf16 permanently in `GRPOTrainer.model_post_init`
+(it never needs gradients, so no precision cost beyond what the policy's own forward
+pass already accepts via autocast). Deliberately deferred for later: the model's own
+KL at step 0 (593.7) is suspiciously large given `model`/`ref_model` start from
+identical weights — likely caused by `self.model.train()` enabling dropout (p=0.2,
+confirmed present in `src/models/transformer.py`) for `old_logprobs`/`new_logprobs`
+while `ref_model` stays in eval mode, producing a spurious noise-driven KL rather than
+a real one. Also deferred: reward=0.0 across every rollout at step 0, and the ~18
+minute step time (12-day ETA) — `Transformer.generate()` has no KV-cache, recomputing
+the full sequence from scratch per generated token. User asked to scope strictly to
+the OOM for now; these are flagged to revisit once training actually runs.

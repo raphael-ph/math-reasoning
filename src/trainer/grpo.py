@@ -156,7 +156,10 @@ class GRPOTrainer(BaseTrainer):
 
     def model_post_init(self, __context):
         self.model.to(self.config.device)
-        self.ref_model.to(self.config.device)
+        # bf16, not fp32: ref_model only ever does a forward pass (no gradients, no
+        # optimizer state), so this halves its memory with no precision cost beyond
+        # what the policy's own forward pass already accepts via autocast bf16.
+        self.ref_model.to(self.config.device, dtype=torch.bfloat16)
         self.ref_model.eval()
         self.ref_model.requires_grad_(False)
 
