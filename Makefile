@@ -50,5 +50,15 @@ SFT_MODEL ?= models/sft/formalizer_v3/final_model.pt
 grpo-formalizer:
 	uv run -m scripts.train_grpo --sft-model $(SFT_MODEL)
 
+# --- Benchmark ---
+# CHECKPOINT is required — any SFT or GRPO checkpoint .pt path. LIMIT is optional (only
+# evaluate the first N holdout rows — useful for a quick smoke test; Transformer.generate()
+# has no KV-cache, so the full ~2000-row holdout will be slow, same reason GRPO rollouts are).
+run-benchmark:
+ifndef CHECKPOINT
+	$(error CHECKPOINT is required. Usage: make run-benchmark CHECKPOINT=models/grpo/formalizer_v1/best_model.pt [LIMIT=100])
+endif
+	uv run -m scripts.run_benchmark --checkpoint $(CHECKPOINT) $(if $(LIMIT),--limit $(LIMIT),)
+
 mlflow-ui:
 	mlflow ui --backend-store-uri sqlite:///mlruns.db --port 5000
