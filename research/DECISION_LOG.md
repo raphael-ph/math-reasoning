@@ -605,3 +605,32 @@ remembering for the thesis methodology section: a "reward stuck at zero" symptom
 should always be diagnosed by reading actual generated text/errors (which is exactly
 why the MLflow rollout-traceability table exists) before concluding anything about
 model capability — the two look identical from the aggregate metric alone.
+
+---
+
+## 2026-09-22 — Benchmark runner for the reserved holdout split
+
+**Gap.** `split_dataset.py` reserves a benchmark holdout, but nothing ever actually
+evaluated a checkpoint against it — the holdout existed only as an unused `.npy` file.
+
+**Built:** `scripts/run_benchmark.py` (`make run-benchmark CHECKPOINT=... [LIMIT=N]`).
+Checkpoint-agnostic (works against any SFT or GRPO `.pt`, since architecture is
+shared) and CLI-driven rather than hardcoded, per the user's ask to be able to
+evaluate arbitrary checkpoints and accumulate "all statistics" over time in MLflow.
+Reuses `SympyRewardFn` directly (same scorer GRPO training uses) and logs in the same
+shape as GRPO's rollout traceability — a `Formalizer_Benchmark` MLflow experiment,
+`execute_rate`/`accuracy`/`mean_reward` metrics, full per-row table — so results are
+directly comparable across checkpoints without inventing a second reporting format.
+
+**Decision: greedy decoding by default (`temperature=0`), not sampled.** GRPO rollouts
+sample (`top_p=0.9, temperature=0.8`) because exploration is the point during
+training. A *reported* benchmark number should be reproducible run-to-run for the
+same checkpoint — sampling would make the same model's benchmark score itself noisy,
+confusing "did the checkpoint get better" with "did we get a lucky/unlucky sample."
+`top_p`/`temperature` are still exposed as CLI flags if sampled eval is ever wanted
+deliberately (e.g. pass@k-style metrics later).
+
+**Known limitation, not addressed here:** `Transformer.generate()` has no KV-cache
+(flagged earlier, still deferred), so evaluating the full ~2000-row holdout will be
+slow for the same reason GRPO rollouts are. Added `--limit`/`LIMIT=` specifically so a
+quick smoke-test run doesn't require sitting through the whole holdout.
