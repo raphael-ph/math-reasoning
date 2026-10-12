@@ -375,7 +375,9 @@ class GRPOTrainer(BaseTrainer):
                 sequences_batch, completion_mask_batch = self._pad_and_stack(rollouts)
                 target_mask = completion_mask_batch[:, 1:]
 
-                self.model.train()
+                # eval mode (dropout off) so old/new/ref log-probs come from the same
+                # deterministic forward pass — otherwise exp(new - old) is pure dropout noise
+                self.model.eval()
                 with torch.no_grad():
                     old_logprobs = self._sequence_logprobs(self.model, sequences_batch)
                     ref_logprobs = self._sequence_logprobs(self.ref_model, sequences_batch)

@@ -154,7 +154,7 @@ class AttentionHead(nn.Module):
         out = F.scaled_dot_product_attention(
             Q, K, V,
             is_causal=True,
-            dropout_p=self.dropout.p
+            dropout_p=self.dropout.p if self.training else 0.0
         )
 
         return out
