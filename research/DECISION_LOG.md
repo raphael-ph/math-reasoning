@@ -634,3 +634,31 @@ deliberately (e.g. pass@k-style metrics later).
 (flagged earlier, still deferred), so evaluating the full ~2000-row holdout will be
 slow for the same reason GRPO rollouts are. Added `--limit`/`LIMIT=` specifically so a
 quick smoke-test run doesn't require sitting through the whole holdout.
+
+---
+
+## 2026-10-12 — GRPO `mean_ratio` ≈ 14: dropout noise in the policy ratio
+
+**Symptom.** A GRPO run logged `mean_ratio=14.2`, `clip_fraction=0.11`, `mean_kl=0.33`
+at `lr=1e-7`. The ratio `exp(new_logprobs - old_logprobs)` should be exactly 1 on the
+first inner epoch (same weights), and a policy that barely moved cannot explain 14.
+
+**Root cause (two parts).**
+1. `AttentionHead` passed `dropout_p=self.dropout.p` to `F.scaled_dot_product_attention`
+   unconditionally, so attention dropout (0.2) stayed active even under `.eval()`.
+2. `GRPOTrainer.train` computed `old_logprobs` / `ref_logprobs` under `self.model.train()`,
+   so `old`, `new` and `ref` each drew different dropout masks.
+Same weights, different noise → the ratio and the k3 KL were dropout noise, and `exp` made
+the mean heavy-tailed.
+
+**Fix.** SDPA dropout now respects `self.training`; the GRPO log-prob passes run in
+`.eval()` (dropout off; gradients still flow). Regression test:
+`tests/test_grpo_ratio.py` asserts `mean_ratio == 1`, `clip_fraction == 0`, `mean_kl == 0`
+before any update, plus a train-mode check that dropout really does perturb log-probs.
+
+**Consequences for the thesis.** Rewards from the affected run (val_reward_mean 0.91,
+val_correct_rate 0.275) were produced by updates driven by noisy clipped ratios and a
+noisy KL term — not comparable to post-fix runs. Re-run logged under a separate MLflow
+experiment (`Formalizer_GRPO_v2_dropout_fix`) and checkpoint dir
+(`models/grpo/formalizer_v2`) so the two are never mixed. SFT eval losses were also
+measured with attention dropout on (same SDPA bug); training itself was unaffected.

@@ -21,7 +21,7 @@ from src.utils.logger import get_logger
 TOKENIZER_PATH = "data/vocab/tokenizer_vocab.json"
 VOCAB_METADATA_PATH = "data/corpus/metadata.json"
 CORPUS_PATH = "data/posttraining/metamath_sympy"
-FINAL_MODEL_PATH = "models/grpo/formalizer_v1/final_model.pt"
+FINAL_MODEL_PATH = "models/grpo/formalizer_v2/final_model.pt"
 # Not best_model.pt: SFT was deliberately trained to overfit (see TODO.md / scripts/train_sft.py,
 # 12k steps "to force overfit", following the InstructGPT paper's finding that the
 # lowest-val-loss checkpoint underperforms a later, overfit one for downstream RL).
@@ -76,6 +76,9 @@ config = GRPOConfig(
     max_new_tokens=768,
     top_p=0.9,
     temperature=0.8,
+    # separate experiment: runs before the dropout fix (mean_ratio ~14 from dropout noise)
+    # live in "Formalizer_GRPO" and aren't comparable with these
+    experiment_name="Formalizer_GRPO_v2_dropout_fix",
 )
 
 train_ds = GRPOPromptDataset(corpus_path=CORPUS_PATH, split="train")

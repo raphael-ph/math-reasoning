@@ -55,6 +55,7 @@ class GRPOConfig(BaseTrainerConfig):
     kl_coef: float = Field(default=0.04, description="Weight (beta) of the KL penalty against the reference model")
     clip_epsilon: float = Field(default=0.2, description="PPO-style clip range for the policy ratio")
     num_inner_epochs: int = Field(default=1, description="Number of gradient updates reusing the same rollout batch (mu)")
+    experiment_name: str = Field(default="Formalizer_GRPO", description="MLflow experiment this run is logged under")
     advantage_eps: float = Field(default=1e-4, description="Added to the group reward std to avoid divide-by-zero when a group's rewards are identical")
 
 class GRPOPromptDataset(Dataset):
@@ -341,7 +342,7 @@ class GRPOTrainer(BaseTrainer):
         train_iter = iter(self._train_dataloader)
 
         mlflow.set_tracking_uri("sqlite:///mlruns.db")
-        mlflow.set_experiment("Formalizer_GRPO")
+        mlflow.set_experiment(self.config.experiment_name)
 
         checkpoint_interval = getattr(self.config, "checkpoint_interval", 1000)
         final_model_path = Path(self.config.final_model_path)
